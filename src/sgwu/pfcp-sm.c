@@ -301,6 +301,18 @@ void sgwu_pfcp_state_associated(ogs_fsm_t *s, sgwu_event_t *e)
     case SGWU_EVT_SXA_NO_HEARTBEAT:
         ogs_warn("No Heartbeat from SGW-C %s",
                 ogs_sockaddr_to_string_static(node->addr_list));
+        /*
+         * PFCP path failure towards the CP peer (TS 23.007 PFCP restoration).
+         * The SGW-C became unreachable. In Kubernetes the CP normally restarts
+         * on a NEW pod IP, which the passive UP sees as a brand-new PFCP node,
+         * so the Recovery-Time-Stamp restart detection never fires for THIS
+         * (old) node. Release the sessions it anchored, otherwise the user
+         * plane keeps state for orphaned bearers the restarted CP no longer
+         * knows about and black-holes their downlink until a manual SGW-U
+         * restart.
+         */
+        pfcp_restoration(node);
+        ogs_error("PFCP restoration (path failure)");
         OGS_FSM_TRAN(s, sgwu_pfcp_state_will_associate);
         break;
     default:
