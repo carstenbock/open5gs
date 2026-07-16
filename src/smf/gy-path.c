@@ -581,14 +581,19 @@ static void fill_ps_information(smf_sess_t *sess, uint32_t cc_request_type,
     } else {
         /* GTPv2C: For PGW, EPS Bearer ID as specified in 3GPP TS 29.274 8.8 */
         smf_bearer_t *bearer = smf_default_bearer_in_sess(sess);
-        ret = fd_msg_avp_new(ogs_diam_gy_3gpp_nsapi, 0, &avpch2);
-        ogs_assert(ret == 0);
-        val.os.data = (uint8_t *)&bearer->ebi;
-        val.os.len = 1;
-        ret = fd_msg_avp_setvalue(avpch2, &val);
-        ogs_assert(ret == 0);
-        ret = fd_msg_avp_add(avpch1, MSG_BRW_LAST_CHILD, avpch2);
-        ogs_assert(ret == 0);
+        /* 3GPP-NSAPI is optional; only emit it when the default bearer still
+         * exists. Guards against a NULL dereference on orphaned sessions whose
+         * bearer list has been emptied. */
+        if (bearer) {
+            ret = fd_msg_avp_new(ogs_diam_gy_3gpp_nsapi, 0, &avpch2);
+            ogs_assert(ret == 0);
+            val.os.data = (uint8_t *)&bearer->ebi;
+            val.os.len = 1;
+            ret = fd_msg_avp_setvalue(avpch2, &val);
+            ogs_assert(ret == 0);
+            ret = fd_msg_avp_add(avpch1, MSG_BRW_LAST_CHILD, avpch2);
+            ogs_assert(ret == 0);
+        }
     }
 
     /* 3GPP-MS-Timezone */

@@ -1757,6 +1757,18 @@ uint8_t smf_n4_handle_session_report_request(
             sess->gy.reporting_reason =
                 smf_pfcp_urr_usage_report_trigger2diam_gy_reporting_reason(&rep_trig);
         }
+        if (!bearer) {
+            /* Orphaned session: the default bearer (and thus its accounting
+             * URR) has been removed, e.g. after failed dedicated-bearer
+             * signalling. A usage report cannot be charged on Gy without a
+             * bearer/URR context (TS 32.299 Used-Service-Unit / PS-Information),
+             * and building a CCR-Update here would dereference a NULL bearer
+             * (and later assert in the CCA-Update handler). Skip the Gy update;
+             * the PFCP report is still answered below. */
+            ogs_warn("[%s:%s] Usage report with no default bearer; "
+                    "skipping Gy CCR-Update",
+                    smf_ue->imsi_bcd, sess->session.name);
+        } else
         switch (smf_use_gy_iface()) {
         case 1:
             if (!sess->gy.final_unit) {
