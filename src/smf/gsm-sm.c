@@ -837,10 +837,23 @@ void smf_gsm_state_wait_pfcp_establishment(ogs_fsm_t *s, smf_event_t *e)
                      * For "PGW/MME initiated bearer deactivation procedure",
                      * PGW-C shall indicate PGW-U to stop counting and stop
                      * forwarding downlink packets for the affected bearer(s).
+                     *
+                     * Handover 3GPP -> Non-3GPP (LTE -> VoWiFi): best-effort
+                     * deactivation of the old E-UTRAN PDN leg. The E-UTRAN
+                     * session may be absent or already bearer-less (rapid
+                     * session churn during handover, or lost across an SMF
+                     * restart), so a failed deactivation must NOT abort the
+                     * daemon (the original ogs_assert() SIGABRT'd the whole SMF
+                     * here on an empty E-UTRAN bearer list). The WLAN session is
+                     * already established; bearer binding proceeds below
+                     * (TS 23.402 clause 8).
                      */
-                    ogs_assert(OGS_OK ==
-                        smf_epc_pfcp_send_deactivation(sess,
-                            OGS_GTP2_CAUSE_RAT_CHANGED_FROM_3GPP_TO_NON_3GPP));
+                    int deact_rv = smf_epc_pfcp_send_deactivation(sess,
+                            OGS_GTP2_CAUSE_RAT_CHANGED_FROM_3GPP_TO_NON_3GPP);
+                    if (deact_rv != OGS_OK)
+                        ogs_warn("3GPP->Non-3GPP handover: E-UTRAN session "
+                            "deactivation skipped [APN:%s]",
+                            sess->session.name);
                 }
                 smf_bearer_binding(sess);
             } else {

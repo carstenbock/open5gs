@@ -1042,6 +1042,11 @@ int smf_epc_pfcp_send_deactivation(smf_sess_t *sess, uint8_t gtp_cause)
                 smf_ue, sess->session.name, OGS_GTP2_RAT_TYPE_EUTRAN);
         if (eutran_sess) {
             if (ogs_list_first(&eutran_sess->bearer_list) == NULL) {
+                /* #region agent log */
+                ogs_error("AGENTDBG7d07ab deact 3GPP->NON3GPP: E-UTRAN sess "
+                        "APN[%s] has EMPTY bearer_list IMSI[%s]",
+                        eutran_sess->session.name, smf_ue->imsi_bcd);
+                /* #endregion */
                 ogs_error("No Bearer List in E-URAN Session");
                 return OGS_ERROR;
             }
