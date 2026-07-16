@@ -1005,6 +1005,16 @@ int smf_epc_pfcp_send_deactivation(smf_sess_t *sess, uint8_t gtp_cause)
         wlan_sess = smf_sess_find_by_apn(
                 smf_ue, sess->session.name, OGS_GTP2_RAT_TYPE_WLAN);
         if (!wlan_sess) {
+            /* #region agent log */
+            smf_sess_t *dbg_sess = NULL;
+            ogs_error("AGENTDBG7d07ab deact NON3GPP->3GPP: WLAN sess NOT found "
+                    "APN[%s] want_rat=WLAN(%d) IMSI[%s]; UE session dump:",
+                    sess->session.name, OGS_GTP2_RAT_TYPE_WLAN,
+                    smf_ue->imsi_bcd);
+            ogs_list_for_each(&smf_ue->sess_list, dbg_sess)
+                ogs_error("AGENTDBG7d07ab deact:   APN[%s] gtp_rat_type=%d",
+                        dbg_sess->session.name, dbg_sess->gtp_rat_type);
+            /* #endregion */
             ogs_error("smf_sess_find_by_apn() failed");
             return OGS_ERROR;
         }

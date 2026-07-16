@@ -755,8 +755,23 @@ void smf_s5c_handle_modify_bearer_request(
         }
 
         if (indication && indication->handover_indication) {
-            ogs_assert(OGS_OK == smf_epc_pfcp_send_deactivation(sess,
-                    OGS_GTP2_CAUSE_ACCESS_CHANGED_FROM_NON_3GPP_TO_3GPP));
+            /*
+             * Handover from Non-3GPP (WLAN/ePDG) to 3GPP (E-UTRAN): deactivate
+             * the old WLAN PDN leg. Best-effort only -- the WLAN session may
+             * legitimately be absent (already released by the ePDG, or lost
+             * across an SMF restart), so a failed lookup must NOT abort the
+             * whole daemon (the original ogs_assert() turned a single UE's
+             * missing peer session into a full SMF SIGABRT + crash loop that
+             * dropped every subscriber). The Modify Bearer Response was already
+             * sent above, so the handover to 3GPP has completed regardless
+             * (TS 23.402 clause 8).
+             */
+            rv = smf_epc_pfcp_send_deactivation(sess,
+                    OGS_GTP2_CAUSE_ACCESS_CHANGED_FROM_NON_3GPP_TO_3GPP);
+            if (rv != OGS_OK)
+                ogs_warn("Non-3GPP->3GPP handover: WLAN session deactivation "
+                        "skipped [IMSI:%s APN:%s]",
+                        smf_ue->imsi_bcd, sess->session.name);
         }
     }
 }
