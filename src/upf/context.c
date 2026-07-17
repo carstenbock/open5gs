@@ -233,12 +233,21 @@ int upf_sess_remove(upf_sess_t *sess)
             sizeof(sess->smf_n4_f_seid), NULL);
 
     if (sess->ipv4) {
-        ogs_hash_set(self.ipv4_hash, sess->ipv4->addr, OGS_IPV4_LEN, NULL);
+        /* Only clear the UE-IP -> session mapping if THIS session still owns
+         * it. During 3GPP<->non-3GPP handover the new access leg takes over the
+         * shared UE IP in ipv4_hash; tearing down the old leg must not wipe the
+         * new owner's entry (that left downlink with no session -> all downlink
+         * dropped -> RTP timeout / silent call). */
+        if (ogs_hash_get(self.ipv4_hash,
+                sess->ipv4->addr, OGS_IPV4_LEN) == sess)
+            ogs_hash_set(self.ipv4_hash, sess->ipv4->addr, OGS_IPV4_LEN, NULL);
         ogs_pfcp_ue_ip_free(sess->ipv4);
     }
     if (sess->ipv6) {
-        ogs_hash_set(self.ipv6_hash,
-                sess->ipv6->addr, OGS_IPV6_DEFAULT_PREFIX_LEN >> 3, NULL);
+        if (ogs_hash_get(self.ipv6_hash, sess->ipv6->addr,
+                OGS_IPV6_DEFAULT_PREFIX_LEN >> 3) == sess)
+            ogs_hash_set(self.ipv6_hash,
+                    sess->ipv6->addr, OGS_IPV6_DEFAULT_PREFIX_LEN >> 3, NULL);
         ogs_pfcp_ue_ip_free(sess->ipv6);
     }
 

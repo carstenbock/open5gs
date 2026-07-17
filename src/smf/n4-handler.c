@@ -1494,8 +1494,20 @@ void smf_epc_n4_handle_session_modification_response(
                 }
 
                 if (indication && indication->handover_indication) {
-                    ogs_assert(OGS_OK == smf_epc_pfcp_send_deactivation(sess,
-                        OGS_GTP2_CAUSE_ACCESS_CHANGED_FROM_NON_3GPP_TO_3GPP));
+                    /*
+                     * Handover from Non-3GPP (WLAN/ePDG) to 3GPP (E-UTRAN):
+                     * best-effort deactivation of the old WLAN PDN leg. A
+                     * missing WLAN session (already released, or lost across an
+                     * SMF restart) must NOT abort the daemon -- mirrors the
+                     * hardening in smf_s5c_handle_modify_bearer_request()
+                     * (TS 23.402 clause 8).
+                     */
+                    int rv = smf_epc_pfcp_send_deactivation(sess,
+                        OGS_GTP2_CAUSE_ACCESS_CHANGED_FROM_NON_3GPP_TO_3GPP);
+                    if (rv != OGS_OK)
+                        ogs_warn("Non-3GPP->3GPP handover: WLAN session "
+                            "deactivation skipped [APN:%s]",
+                            sess->session.name);
                 }
             }
         } else {
