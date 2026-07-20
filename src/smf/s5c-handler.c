@@ -287,6 +287,46 @@ uint8_t smf_s5c_handle_create_session_request(
     rv = ogs_paa_to_ip(paa, &sess->session.ue_ip);
     ogs_assert(rv == OGS_OK);
 
+    /*
+     * Non-3GPP -> 3GPP handover (TS 23.402 clause 8.2.2): preserve the UE IP.
+     *
+     * For a dynamically-addressed UE the MME cannot populate the PAA (it has no
+     * knowledge of the address assigned over the non-3GPP access), so the S5/S8
+     * Create Session Request arrives with PAA 0.0.0.0 even though the Handover
+     * Indication is set. Reuse the address already assigned to the peer
+     * (WLAN/S2b) PDN connection so the IMS media and registration survive the
+     * handover -- mirroring the 3GPP->non-3GPP path where the ePDG supplies the
+     * existing IP in the PAA. The PDN GW, being the anchor, is the entity
+     * responsible for address continuity on handover.
+     */
+    if (sess->gtp_rat_type == OGS_GTP2_RAT_TYPE_EUTRAN &&
+            req->indication_flags.presence &&
+            req->indication_flags.data && req->indication_flags.len &&
+            ((ogs_gtp2_indication_t *)req->indication_flags.data)->
+                handover_indication) {
+        smf_sess_t *wlan_sess = smf_sess_find_by_apn(
+                smf_ue, sess->session.name, OGS_GTP2_RAT_TYPE_WLAN);
+        if (wlan_sess) {
+            static const uint8_t zero6[OGS_IPV6_LEN] = { 0 };
+            if (wlan_sess->ipv4 && sess->session.ue_ip.ipv4 &&
+                    sess->session.ue_ip.addr == 0) {
+                sess->session.ue_ip.addr = wlan_sess->ipv4->addr[0];
+                ogs_info("Non-3GPP->3GPP handover: reuse UE IPv4[%s] from WLAN "
+                        "session [IMSI:%s APN:%s]",
+                        OGS_INET_NTOP(&sess->session.ue_ip.addr, buf1),
+                        smf_ue->imsi_bcd, sess->session.name);
+            }
+            if (wlan_sess->ipv6 && sess->session.ue_ip.ipv6 &&
+                    memcmp(sess->session.ue_ip.addr6, zero6, OGS_IPV6_LEN) == 0) {
+                memcpy(sess->session.ue_ip.addr6,
+                        wlan_sess->ipv6->addr, OGS_IPV6_LEN);
+                ogs_info("Non-3GPP->3GPP handover: reuse UE IPv6 prefix from "
+                        "WLAN session [IMSI:%s APN:%s]",
+                        smf_ue->imsi_bcd, sess->session.name);
+            }
+        }
+    }
+
     /* Set UE IP Address */
     rv = smf_sess_set_ue_ip(sess);
     if (rv != OGS_PFCP_CAUSE_REQUEST_ACCEPTED) {
