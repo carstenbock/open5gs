@@ -302,6 +302,16 @@ uint8_t smf_s5c_handle_create_session_request(
      * supplies the existing IP in the PAA. The PDN GW, being the anchor, is the
      * entity responsible for address continuity on handover. Sessions carrying
      * an explicit PAA (e.g. static/subscribed IP) are left untouched.
+     *
+     * SPEC-DEVIATION: TS 23.402 §8.2.2 / TS 29.274 §8.12 -- the standardised
+     * trigger for handover IP preservation is the Handover Indication (set by
+     * the MME from NAS Request Type = "handover", TS 24.301 §9.9.4.14). Here
+     * IP reuse is instead inferred from a concurrent live WLAN/S2b PDN
+     * connection for the same subscriber+APN, because the observed UE performs
+     * the WiFi->LTE re-attach with Request Type = "initial" (HI=0). The outcome
+     * (the PDN GW anchor preserves the UE IP across accesses) matches the spec;
+     * the detection mechanism does not. Scoped to EUTRAN + dynamic PAA so
+     * genuine initial attaches with distinct APNs/IPs are unaffected.
      */
     if (sess->gtp_rat_type == OGS_GTP2_RAT_TYPE_EUTRAN) {
         smf_sess_t *wlan_sess = smf_sess_find_by_apn(
