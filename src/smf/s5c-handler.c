@@ -292,18 +292,18 @@ uint8_t smf_s5c_handle_create_session_request(
      *
      * For a dynamically-addressed UE the MME cannot populate the PAA (it has no
      * knowledge of the address assigned over the non-3GPP access), so the S5/S8
-     * Create Session Request arrives with PAA 0.0.0.0 even though the Handover
-     * Indication is set. Reuse the address already assigned to the peer
-     * (WLAN/S2b) PDN connection so the IMS media and registration survive the
-     * handover -- mirroring the 3GPP->non-3GPP path where the ePDG supplies the
-     * existing IP in the PAA. The PDN GW, being the anchor, is the entity
-     * responsible for address continuity on handover.
+     * Create Session Request for a WiFi->LTE handover arrives with PAA 0.0.0.0.
+     * Some UEs additionally do not set the Handover Indication for this attach
+     * (observed HI=False), so the flag cannot be relied upon. Instead, treat an
+     * EUTRAN Create Session with a dynamic PAA as a handover whenever the same
+     * UE already holds a live PDN connection for this APN on the peer WLAN/S2b
+     * access, and reuse that connection's address so the IMS media/registration
+     * survive -- mirroring the working 3GPP->non-3GPP path where the ePDG
+     * supplies the existing IP in the PAA. The PDN GW, being the anchor, is the
+     * entity responsible for address continuity on handover. Sessions carrying
+     * an explicit PAA (e.g. static/subscribed IP) are left untouched.
      */
-    if (sess->gtp_rat_type == OGS_GTP2_RAT_TYPE_EUTRAN &&
-            req->indication_flags.presence &&
-            req->indication_flags.data && req->indication_flags.len &&
-            ((ogs_gtp2_indication_t *)req->indication_flags.data)->
-                handover_indication) {
+    if (sess->gtp_rat_type == OGS_GTP2_RAT_TYPE_EUTRAN) {
         smf_sess_t *wlan_sess = smf_sess_find_by_apn(
                 smf_ue, sess->session.name, OGS_GTP2_RAT_TYPE_WLAN);
         if (wlan_sess) {
