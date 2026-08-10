@@ -530,6 +530,8 @@ static int pcrf_rx_aar_cb(struct msg **msg, struct avp *avp,
         )
 
         ogs_ims_data_free(&rx_message.ims_data);
+        if (gx_sid)
+            ogs_free(gx_sid);
         return 0;
     }
 
@@ -572,6 +574,9 @@ out:
 
     /* Always free IMS data */
     ogs_ims_data_free(&rx_message.ims_data);
+
+    if (gx_sid)
+        ogs_free(gx_sid);
 
     return 0;
 }
