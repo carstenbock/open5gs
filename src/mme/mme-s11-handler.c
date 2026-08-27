@@ -1490,6 +1490,7 @@ void mme_s11_handle_release_access_bearers_response(
         ogs_error("MME-UE Context has already been removed");
         return;
     }
+    mme_ue->rab_xact_id = OGS_INVALID_POOL_ID;
     sgw_ue = sgw_ue_find_by_id(mme_ue->sgw_ue_id);
     ogs_assert(sgw_ue);
 

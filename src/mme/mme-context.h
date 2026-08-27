@@ -756,6 +756,9 @@ struct mme_ue_s {
     } while(0)
     ogs_pool_id_t   enb_ue_holding_id;
 
+    /* Outstanding S11 Release Access Bearers transaction, if any */
+    ogs_pool_id_t   rab_xact_id;
+
     struct {
 #define MME_CLEAR_PAGING_INFO(__mME) \
     do { \

@@ -525,7 +525,8 @@ sgwc_sess_t *sgwc_sess_find_by_id(ogs_pool_id_t id)
 }
 
 int sgwc_sess_pfcp_xact_count(
-        sgwc_ue_t *sgwc_ue, uint8_t pfcp_type, uint64_t modify_flags)
+        sgwc_ue_t *sgwc_ue, uint8_t pfcp_type, uint64_t modify_flags,
+        ogs_pool_id_t assoc_xact_id)
 {
     sgwc_sess_t *sess = NULL;
     int xact_count = 0;
@@ -545,6 +546,9 @@ int sgwc_sess_pfcp_xact_count(
             if (!(pfcp_xact->modify_flags & OGS_PFCP_MODIFY_SESSION))
                 continue;
             if (modify_flags && modify_flags != pfcp_xact->modify_flags)
+                continue;
+            if (assoc_xact_id != OGS_INVALID_POOL_ID &&
+                    pfcp_xact->assoc_xact_id != assoc_xact_id)
                 continue;
 
             sess_id = OGS_POINTER_TO_UINT(pfcp_xact->data);

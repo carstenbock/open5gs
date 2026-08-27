@@ -165,6 +165,9 @@ static void timeout(ogs_gtp_xact_t *xact, void *data)
     ogs_assert(mme_ue);
     enb_ue = enb_ue_find_by_id(mme_ue->enb_ue_id);
 
+    if (type == OGS_GTP2_RELEASE_ACCESS_BEARERS_REQUEST_TYPE)
+        mme_ue->rab_xact_id = OGS_INVALID_POOL_ID;
+
     switch (type) {
     case OGS_GTP2_DELETE_SESSION_REQUEST_TYPE:
         /*
@@ -603,6 +606,17 @@ int mme_gtp_send_release_access_bearers_request(
     ogs_assert(enb_ue);
     ogs_assert(action);
     ogs_assert(mme_ue);
+
+    if (mme_ue->rab_xact_id != OGS_INVALID_POOL_ID) {
+        ogs_gtp_xact_t *pending = ogs_gtp_xact_find_by_id(mme_ue->rab_xact_id);
+        if (pending) {
+            ogs_info("[%s] Release Access Bearers already in flight, skip",
+                    mme_ue->imsi_bcd);
+            return OGS_OK;
+        }
+        mme_ue->rab_xact_id = OGS_INVALID_POOL_ID;
+    }
+
     sgw_ue = sgw_ue_find_by_id(mme_ue->sgw_ue_id);
     ogs_assert(sgw_ue);
 
@@ -626,6 +640,7 @@ int mme_gtp_send_release_access_bearers_request(
     xact->release_action = action;
     xact->local_teid = mme_ue->gn.mme_gn_teid;
     xact->enb_ue_id = enb_ue->id;
+    mme_ue->rab_xact_id = xact->id;
 
     rv = ogs_gtp_xact_commit(xact);
     ogs_expect(rv == OGS_OK);

@@ -3752,6 +3752,7 @@ mme_ue_t *mme_ue_add(enb_ue_t *enb_ue)
         return NULL;
     }
     mme_ue->gn.gtp_xact_id = OGS_INVALID_POOL_ID;
+    mme_ue->rab_xact_id = OGS_INVALID_POOL_ID;
 
     ogs_list_init(&mme_ue->sess_list);
 

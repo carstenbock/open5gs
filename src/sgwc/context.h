@@ -165,9 +165,13 @@ sgwc_sess_t *sgwc_sess_find_by_ebi(sgwc_ue_t *sgwc_ue, uint8_t ebi);
 sgwc_sess_t *sgwc_sess_find_by_id(ogs_pool_id_t id);
 
 #define SGWC_SESSION_SYNC_DONE(__sGWC, __tYPE, __fLAGS) \
-    (sgwc_sess_pfcp_xact_count(__sGWC, __tYPE, __fLAGS) == 0)
+    (sgwc_sess_pfcp_xact_count(__sGWC, __tYPE, __fLAGS, \
+            OGS_INVALID_POOL_ID) == 0)
+#define SGWC_SESSION_SYNC_DONE_FOR(__sGWC, __tYPE, __fLAGS, __aSSOC) \
+    (sgwc_sess_pfcp_xact_count(__sGWC, __tYPE, __fLAGS, __aSSOC) == 0)
 int sgwc_sess_pfcp_xact_count(
-        sgwc_ue_t *sgwc_ue, uint8_t pfcp_type, uint64_t modify_flags);
+        sgwc_ue_t *sgwc_ue, uint8_t pfcp_type, uint64_t modify_flags,
+        ogs_pool_id_t assoc_xact_id);
 
 sgwc_bearer_t *sgwc_bearer_add(sgwc_sess_t *sess);
 int sgwc_bearer_remove(sgwc_bearer_t *bearer);

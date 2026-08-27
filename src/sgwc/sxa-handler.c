@@ -758,8 +758,9 @@ void sgwc_sxa_handle_session_modification_response(
             ogs_pfcp_xact_commit(pfcp_xact);
 
             ogs_assert(flags & OGS_PFCP_MODIFY_SESSION);
-            if (SGWC_SESSION_SYNC_DONE(sgwc_ue,
-                OGS_PFCP_SESSION_MODIFICATION_REQUEST_TYPE, flags)) {
+            if (SGWC_SESSION_SYNC_DONE_FOR(sgwc_ue,
+                OGS_PFCP_SESSION_MODIFICATION_REQUEST_TYPE, flags,
+                s11_xact->id)) {
 
                 sgwc_tunnel_t *tunnel = NULL, *next_tunnel = NULL;
                 ogs_gtp2_delete_indirect_data_forwarding_tunnel_response_t
@@ -981,8 +982,9 @@ void sgwc_sxa_handle_session_modification_response(
             ogs_pfcp_xact_commit(pfcp_xact);
 
             ogs_assert(flags & OGS_PFCP_MODIFY_SESSION);
-            if (SGWC_SESSION_SYNC_DONE(sgwc_ue,
-                OGS_PFCP_SESSION_MODIFICATION_REQUEST_TYPE, flags)) {
+            if (SGWC_SESSION_SYNC_DONE_FOR(sgwc_ue,
+                OGS_PFCP_SESSION_MODIFICATION_REQUEST_TYPE, flags,
+                s11_xact->id)) {
 
                 sgwc_tunnel_t *tunnel = NULL;
 
@@ -1190,8 +1192,9 @@ void sgwc_sxa_handle_session_modification_response(
             ogs_expect(rv == OGS_OK);
 
         } else if (flags & OGS_PFCP_MODIFY_DL_ONLY) {
-            if (SGWC_SESSION_SYNC_DONE(sgwc_ue,
-                    OGS_PFCP_SESSION_MODIFICATION_REQUEST_TYPE, flags)) {
+            if (SGWC_SESSION_SYNC_DONE_FOR(sgwc_ue,
+                    OGS_PFCP_SESSION_MODIFICATION_REQUEST_TYPE, flags,
+                    s11_xact->id)) {
                 ogs_gtp2_modify_bearer_request_t *gtp_req = NULL;
                 ogs_gtp2_modify_bearer_response_t *gtp_rsp = NULL;
 
@@ -1346,8 +1349,9 @@ void sgwc_sxa_handle_session_modification_response(
             ogs_pfcp_xact_commit(pfcp_xact);
 
             ogs_assert(flags & OGS_PFCP_MODIFY_SESSION);
-            if (s11_xact && SGWC_SESSION_SYNC_DONE(sgwc_ue,
-                    OGS_PFCP_SESSION_MODIFICATION_REQUEST_TYPE, flags)) {
+            if (s11_xact && SGWC_SESSION_SYNC_DONE_FOR(sgwc_ue,
+                    OGS_PFCP_SESSION_MODIFICATION_REQUEST_TYPE, flags,
+                    s11_xact->id)) {
 
                 ogs_gtp2_release_access_bearers_response_t *gtp_rsp = NULL;
 

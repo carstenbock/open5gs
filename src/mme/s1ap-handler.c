@@ -1361,7 +1361,7 @@ void s1ap_handle_initial_context_setup_failure(
         &unsuccessfulOutcome->value.choice.InitialContextSetupFailure;
     ogs_assert(InitialContextSetupFailure);
 
-    ogs_debug("InitialContextSetupFailure");
+    ogs_info("InitialContextSetupFailure");
 
     for (i = 0; i < InitialContextSetupFailure->protocolIEs.list.count; i++) {
         ie = InitialContextSetupFailure->protocolIEs.list.array[i];
@@ -1390,7 +1390,7 @@ void s1ap_handle_initial_context_setup_failure(
         return;
     }
 
-    ogs_debug("    ENB_UE_S1AP_ID[%d] MME_UE_S1AP_ID[%d]",
+    ogs_info("    ENB_UE_S1AP_ID[%d] MME_UE_S1AP_ID[%d]",
             enb_ue->enb_ue_s1ap_id, enb_ue->mme_ue_s1ap_id);
 
     if (!Cause) {
@@ -1402,7 +1402,7 @@ void s1ap_handle_initial_context_setup_failure(
         return;
     }
 
-    ogs_debug("    Cause[Group:%d Cause:%d]",
+    ogs_info("    Cause[Group:%d Cause:%d]",
             Cause->present, (int)Cause->choice.radioNetwork);
 
     mme_ue = mme_ue_find_by_id(enb_ue->mme_ue_id);
@@ -1900,7 +1900,7 @@ void s1ap_handle_ue_context_release_request(
         &initiatingMessage->value.choice.UEContextReleaseRequest;
     ogs_assert(UEContextReleaseRequest);
 
-    ogs_debug("UEContextReleaseRequest");
+    ogs_info("UEContextReleaseRequest");
 
     for (i = 0; i < UEContextReleaseRequest->protocolIEs.list.count; i++) {
         ie = UEContextReleaseRequest->protocolIEs.list.array[i];
@@ -1961,7 +1961,7 @@ void s1ap_handle_ue_context_release_request(
         return;
     }
 
-    ogs_debug("    ENB_UE_S1AP_ID[%d] MME_UE_S1AP_ID[%d]",
+    ogs_info("    ENB_UE_S1AP_ID[%d] MME_UE_S1AP_ID[%d]",
             enb_ue->enb_ue_s1ap_id, enb_ue->mme_ue_s1ap_id);
 
     if (!Cause) {
@@ -1973,7 +1973,7 @@ void s1ap_handle_ue_context_release_request(
         return;
     }
 
-    ogs_debug("    Cause[Group:%d Cause:%d]",
+    ogs_info("    Cause[Group:%d Cause:%d]",
             Cause->present, (int)Cause->choice.radioNetwork);
 
     switch (Cause->present) {
