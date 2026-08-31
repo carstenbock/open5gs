@@ -44,6 +44,8 @@ const char *smf_timer_get_name(int timer_id)
         return "SMF_TIMER_PFCP_NO_ESTABLISHMENT_RESPONSE";
     case SMF_TIMER_PFCP_NO_DELETION_RESPONSE:
         return "SMF_TIMER_PFCP_NO_DELETION_RESPONSE";
+    case SMF_TIMER_P_CSCF_REFRESH:
+        return "SMF_TIMER_P_CSCF_REFRESH";
     default: 
        break;
     }
@@ -56,15 +58,20 @@ static void timer_send_event(int timer_id, void *data)
 {
     int rv;
     smf_event_t *e = NULL;
-    ogs_assert(data);
 
     switch (timer_id) {
     case SMF_TIMER_PFCP_ASSOCIATION:
     case SMF_TIMER_PFCP_NO_HEARTBEAT:
+        ogs_assert(data);
         e = smf_event_new(SMF_EVT_N4_TIMER);
         ogs_assert(e);
         e->h.timer_id = timer_id;
         e->pfcp_node = data;
+        break;
+    case SMF_TIMER_P_CSCF_REFRESH:
+        e = smf_event_new(SMF_EVT_P_CSCF_REFRESH);
+        ogs_assert(e);
+        e->h.timer_id = timer_id;
         break;
     default:
         ogs_fatal("Unknown timer id[%d]", timer_id);
@@ -88,4 +95,9 @@ void smf_timer_pfcp_association(void *data)
 void smf_timer_pfcp_no_heartbeat(void *data)
 {
     timer_send_event(SMF_TIMER_PFCP_NO_HEARTBEAT, data);
+}
+
+void smf_timer_p_cscf_refresh(void *data)
+{
+    timer_send_event(SMF_TIMER_P_CSCF_REFRESH, data);
 }

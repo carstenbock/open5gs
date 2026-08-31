@@ -136,6 +136,15 @@ typedef struct smf_context_s {
     int             num_of_p_cscf6;
     int             p_cscf6_index;
 
+    /* Raw `p-cscf` config entries (IP literals or FQDNs) as written in
+     * smf.yaml. Kept so FQDN entries can be re-resolved periodically
+     * (see `p-cscf-refresh-interval`) without restarting the SMF. */
+    char            *p_cscf_config[MAX_NUM_OF_P_CSCF];
+    int             num_of_p_cscf_config;
+    /* Re-resolution interval for `p-cscf` entries (0 = disabled). */
+    ogs_time_t      p_cscf_refresh_interval;
+    ogs_timer_t     *t_p_cscf_refresh;
+
     /* P-CSCF provisioning policy for the address(es) returned in PCO/ePCO
      * (Gm) at PDP/PDU session establishment.
      *   p_cscf_return_all = false (default): one address per session.
@@ -734,6 +743,11 @@ void smf_context_final(void);
 smf_context_t *smf_self(void);
 
 int smf_context_parse_config(void);
+
+/* (Re-)resolve the configured `p-cscf` entries into the address lists
+ * handed out in PCO/ePCO. Called at config parse time and periodically
+ * from SMF_TIMER_P_CSCF_REFRESH. */
+void smf_context_p_cscf_resolve(void);
 
 int smf_use_gy_iface(void);
 

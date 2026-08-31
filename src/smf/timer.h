@@ -35,6 +35,8 @@ typedef enum {
     SMF_TIMER_PFCP_NO_ESTABLISHMENT_RESPONSE,
     SMF_TIMER_PFCP_NO_DELETION_RESPONSE,
 
+    SMF_TIMER_P_CSCF_REFRESH,
+
     MAX_NUM_OF_SMF_TIMER,
 
 } smf_timer_e;
@@ -43,6 +45,7 @@ const char *smf_timer_get_name(int timer_id);
 
 void smf_timer_pfcp_association(void *data);
 void smf_timer_pfcp_no_heartbeat(void *data);
+void smf_timer_p_cscf_refresh(void *data);
 
 #ifdef __cplusplus
 }

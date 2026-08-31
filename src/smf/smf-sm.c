@@ -1442,6 +1442,15 @@ void smf_state_operational(ogs_fsm_t *s, smf_event_t *e)
         ogs_fsm_dispatch(&sess->sm, e);
         break;
 
+    case SMF_EVT_P_CSCF_REFRESH:
+        /* Re-resolve the configured `p-cscf` entries (FQDNs) so that new
+         * sessions receive the current address set in PCO/ePCO. */
+        smf_context_p_cscf_resolve();
+        if (smf_self()->t_p_cscf_refresh)
+            ogs_timer_start(smf_self()->t_p_cscf_refresh,
+                    smf_self()->p_cscf_refresh_interval);
+        break;
+
     default:
         ogs_error("No handler for event %s", smf_event_get_name(e));
         break;

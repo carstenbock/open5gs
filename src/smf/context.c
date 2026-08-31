@@ -149,6 +149,11 @@ void smf_context_final(void)
         ogs_free(self.p_cscf[i]);
     for (i = 0; i < self.num_of_p_cscf6; i++)
         ogs_free(self.p_cscf6[i]);
+    for (i = 0; i < self.num_of_p_cscf_config; i++)
+        ogs_free(self.p_cscf_config[i]);
+
+    if (self.t_p_cscf_refresh)
+        ogs_timer_delete(self.t_p_cscf_refresh);
 
     ogs_pool_final(&smf_gtp_node_pool);
 
@@ -296,6 +301,116 @@ static int smf_context_validation(void)
     }
 
     return OGS_OK;
+}
+
+static int p_cscf_addr_compare(const void *a, const void *b)
+{
+    return strcmp(*(char * const *)a, *(char * const *)b);
+}
+
+/* Compare two address-string lists as sets. DNS servers (e.g. Kubernetes
+ * CoreDNS) shuffle record order between queries, so an order-sensitive
+ * comparison would report a change on every refresh. */
+static bool p_cscf_list_equal(char **a, int num_a, char **b, int num_b)
+{
+    char *sorted_a[MAX_NUM_OF_P_CSCF], *sorted_b[MAX_NUM_OF_P_CSCF];
+    int i;
+
+    if (num_a != num_b)
+        return false;
+
+    memcpy(sorted_a, a, sizeof(char *) * num_a);
+    memcpy(sorted_b, b, sizeof(char *) * num_b);
+    qsort(sorted_a, num_a, sizeof(char *), p_cscf_addr_compare);
+    qsort(sorted_b, num_b, sizeof(char *), p_cscf_addr_compare);
+
+    for (i = 0; i < num_a; i++)
+        if (strcmp(sorted_a[i], sorted_b[i]) != 0)
+            return false;
+
+    return true;
+}
+
+void smf_context_p_cscf_resolve(void)
+{
+    char *new4[MAX_NUM_OF_P_CSCF], *new6[MAX_NUM_OF_P_CSCF];
+    int num4 = 0, num6 = 0;
+    int i;
+    char buf[OGS_ADDRSTRLEN];
+
+    if (!self.num_of_p_cscf_config)
+        return;
+
+    for (i = 0; i < self.num_of_p_cscf_config; i++) {
+        ogs_sockaddr_t *resolved_list = NULL, *cur = NULL;
+        int res;
+
+        res = ogs_sockaddr_from_ip_or_fqdn(
+                &resolved_list, AF_UNSPEC, self.p_cscf_config[i], 0);
+        if (res != OGS_OK || !resolved_list) {
+            ogs_error("Failed to resolve P-CSCF address: %s",
+                    self.p_cscf_config[i]);
+            continue; /* Skip this entry and move to the next */
+        }
+
+        for (cur = resolved_list; cur; cur = cur->next) {
+            if (cur->ogs_sa_family == AF_INET) {
+                if (num4 < MAX_NUM_OF_P_CSCF) {
+                    new4[num4++] = ogs_ipstrdup(cur);
+                } else {
+                    ogs_warn("Ignore P-CSCF IPv4 (max %d reached): %s",
+                            MAX_NUM_OF_P_CSCF, OGS_ADDR(cur, buf));
+                }
+            } else if (cur->ogs_sa_family == AF_INET6) {
+                if (num6 < MAX_NUM_OF_P_CSCF) {
+                    new6[num6++] = ogs_ipstrdup(cur);
+                } else {
+                    ogs_warn("Ignore P-CSCF IPv6 (max %d reached): %s",
+                            MAX_NUM_OF_P_CSCF, OGS_ADDR(cur, buf));
+                }
+            }
+        }
+        ogs_freeaddrinfo(resolved_list);
+    }
+
+    if (!num4 && !num6 && (self.num_of_p_cscf || self.num_of_p_cscf6)) {
+        /* Total resolution failure (e.g. transient DNS outage):
+         * keep the last known-good lists instead of wiping them. */
+        ogs_warn("P-CSCF resolution yielded no addresses; "
+                "keeping previous list (%d IPv4, %d IPv6)",
+                self.num_of_p_cscf, self.num_of_p_cscf6);
+        return;
+    }
+
+    if (p_cscf_list_equal(new4, num4, self.p_cscf, self.num_of_p_cscf) &&
+        p_cscf_list_equal(new6, num6, self.p_cscf6, self.num_of_p_cscf6)) {
+        for (i = 0; i < num4; i++)
+            ogs_free(new4[i]);
+        for (i = 0; i < num6; i++)
+            ogs_free(new6[i]);
+        return;
+    }
+
+    for (i = 0; i < self.num_of_p_cscf; i++)
+        ogs_free(self.p_cscf[i]);
+    for (i = 0; i < self.num_of_p_cscf6; i++)
+        ogs_free(self.p_cscf6[i]);
+
+    for (i = 0; i < num4; i++)
+        self.p_cscf[i] = new4[i];
+    self.num_of_p_cscf = num4;
+    for (i = 0; i < num6; i++)
+        self.p_cscf6[i] = new6[i];
+    self.num_of_p_cscf6 = num6;
+
+    /* Restart rotation from a known position on the new list */
+    self.p_cscf_index = 0;
+    self.p_cscf6_index = 0;
+
+    for (i = 0; i < num4; i++)
+        ogs_info("P-CSCF IPv4[%d]: %s", i, self.p_cscf[i]);
+    for (i = 0; i < num6; i++)
+        ogs_info("P-CSCF IPv6[%d]: %s", i, self.p_cscf6[i]);
 }
 
 int smf_context_parse_config(void)
@@ -556,14 +671,9 @@ int smf_context_parse_config(void)
                     ogs_assert(ogs_yaml_iter_type(&p_cscf_iter) !=
                             YAML_MAPPING_NODE);
 
-                    self.num_of_p_cscf = 0;
-                    self.num_of_p_cscf6 = 0;
+                    self.num_of_p_cscf_config = 0;
                     do {
                         const char *v = NULL;
-                        ogs_sockaddr_t *resolved_list = NULL;
-                        ogs_sockaddr_t *cur = NULL;
-                        char buf[OGS_ADDRSTRLEN];
-                        int res;
 
                         if (ogs_yaml_iter_type(&p_cscf_iter) ==
                                 YAML_SEQUENCE_NODE) {
@@ -576,46 +686,31 @@ int smf_context_parse_config(void)
                             continue;
                         }
 
-                        /* Use the new API to resolve IP or FQDN
-                         * into one or more addresses */
-                        res = ogs_sockaddr_from_ip_or_fqdn(
-                                &resolved_list, AF_UNSPEC, v, 0);
-                        if (res != OGS_OK || !resolved_list) {
-                            ogs_error("Failed to resolve P-CSCF address: %s",
-                                    v);
-                            continue; /* Skip this entry and move to the next */
+                        /* Keep the raw entry (IP literal or FQDN) so it
+                         * can be re-resolved later; actual resolution is
+                         * done in smf_context_p_cscf_resolve() below. */
+                        if (self.num_of_p_cscf_config < MAX_NUM_OF_P_CSCF) {
+                            self.p_cscf_config[self.num_of_p_cscf_config++] =
+                                ogs_strdup(v);
+                        } else {
+                            ogs_warn("Ignore P-CSCF entry "
+                                    "(max %d reached): %s",
+                                    MAX_NUM_OF_P_CSCF, v);
                         }
-
-                        /* Iterate through all resolved addresses
-                         * and store them */
-                        for (cur = resolved_list; cur; cur = cur->next) {
-                            if (cur->ogs_sa_family == AF_INET) {
-                                if (self.num_of_p_cscf < MAX_NUM_OF_P_CSCF) {
-                                    self.p_cscf[self.num_of_p_cscf++] =
-                                        ogs_ipstrdup(cur);
-                                } else {
-                                    ogs_warn("Ignore P-CSCF IPv4 "
-                                            "(max %d reached): %s",
-                                             MAX_NUM_OF_P_CSCF,
-                                             OGS_ADDR(cur, buf));
-                                }
-                            } else if (cur->ogs_sa_family == AF_INET6) {
-                                if (self.num_of_p_cscf6 < MAX_NUM_OF_P_CSCF) {
-                                    self.p_cscf6[self.num_of_p_cscf6++] =
-                                        ogs_ipstrdup(cur);
-                                } else {
-                                    ogs_warn("Ignore P-CSCF IPv6 "
-                                            "(max %d reached): %s",
-                                             MAX_NUM_OF_P_CSCF,
-                                             OGS_ADDR(cur, buf));
-                                }
-                            }
-                        }
-                        /* free the linked list */
-                        ogs_freeaddrinfo(resolved_list);
 
                     } while (ogs_yaml_iter_type(&p_cscf_iter) ==
                             YAML_SEQUENCE_NODE);
+
+                    smf_context_p_cscf_resolve();
+
+                } else if (!strcmp(smf_key, "p-cscf-refresh-interval")) {
+                    /* Seconds between DNS re-resolutions of the configured
+                     * `p-cscf` entries (0 or absent = resolve only once
+                     * at startup, the legacy behaviour). */
+                    const char *v = ogs_yaml_iter_value(&smf_iter);
+                    if (v)
+                        self.p_cscf_refresh_interval =
+                            ogs_time_from_sec(atoi(v));
 
                 } else if (!strcmp(smf_key, "p-cscf-policy")) {
                     ogs_yaml_iter_t policy_iter;
@@ -1047,6 +1142,16 @@ int smf_context_parse_config(void)
 
     rv = smf_context_validation();
     if (rv != OGS_OK) return rv;
+
+    /* Periodic DNS re-resolution of the configured `p-cscf` entries so
+     * that changed records (e.g. Kubernetes headless-service endpoints)
+     * are announced to new sessions without an SMF restart. */
+    if (self.p_cscf_refresh_interval > 0 && self.num_of_p_cscf_config) {
+        self.t_p_cscf_refresh = ogs_timer_add(
+                ogs_app()->timer_mgr, smf_timer_p_cscf_refresh, NULL);
+        ogs_assert(self.t_p_cscf_refresh);
+        ogs_timer_start(self.t_p_cscf_refresh, self.p_cscf_refresh_interval);
+    }
 
     return OGS_OK;
 }
