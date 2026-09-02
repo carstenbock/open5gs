@@ -105,6 +105,29 @@ void testesm_handle_activate_default_eps_bearer_context_request(
         ogs_fatal("Invalid PDU Address Type [%d]", pdn_address->pdn_type);
         ogs_assert_if_reached();
     }
+
+    sess->pco_len = 0;
+    if (activate_default_eps_bearer_context_request->presencemask &
+            OGS_NAS_EPS_ACTIVATE_DEFAULT_EPS_BEARER_CONTEXT_REQUEST_PROTOCOL_CONFIGURATION_OPTIONS_PRESENT) {
+        ogs_nas_protocol_configuration_options_t *pco =
+            &activate_default_eps_bearer_context_request->
+                protocol_configuration_options;
+        sess->pco_len = pco->length;
+        if (sess->pco_len > OGS_MAX_PCO_LEN)
+            sess->pco_len = OGS_MAX_PCO_LEN;
+        memcpy(sess->pco, pco->buffer, sess->pco_len);
+    } else if (
+            activate_default_eps_bearer_context_request->presencemask &
+            OGS_NAS_EPS_ACTIVATE_DEFAULT_EPS_BEARER_CONTEXT_REQUEST_EXTENDED_PROTOCOL_CONFIGURATION_OPTIONS_PRESENT) {
+        ogs_nas_extended_protocol_configuration_options_t *epco =
+            &activate_default_eps_bearer_context_request->
+                extended_protocol_configuration_options;
+        sess->pco_len = epco->length;
+        if (sess->pco_len > OGS_MAX_PCO_LEN)
+            sess->pco_len = OGS_MAX_PCO_LEN;
+        if (epco->buffer)
+            memcpy(sess->pco, epco->buffer, sess->pco_len);
+    }
 }
 
 void testesm_handle_activate_dedicated_eps_bearer_context_request(

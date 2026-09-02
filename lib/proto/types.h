@@ -677,6 +677,7 @@ int ogs_fqdn_parse(char *dst, const char *src, int len);
 #define OGS_PCO_ID_PASSWORD_AUTHENTICATION_PROTOCOL             0xc023
 #define OGS_PCO_ID_CHALLENGE_HANDSHAKE_AUTHENTICATION_PROTOCOL  0xc223
 #define OGS_PCO_ID_P_CSCF_IPV6_ADDRESS_REQUEST                  0x0001
+#define OGS_PCO_ID_IM_CN_SUBSYSTEM_SIGNALING_FLAG               0x0002
 #define OGS_PCO_ID_DNS_SERVER_IPV6_ADDRESS_REQUEST              0x0003
 #define OGS_PCO_ID_MS_SUPPORTS_BCM                              0x0005
 #define OGS_PCO_ID_IP_ADDRESS_ALLOCATION_VIA_NAS_SIGNALLING     0x000a

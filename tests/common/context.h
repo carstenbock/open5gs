@@ -465,6 +465,11 @@ typedef struct test_sess_s {
 
     ogs_list_t qos_flow_to_modify_list;
 
+    /* Network PCO/ePCO from Activate Default EPS Bearer /
+     * PDU Session Establishment Accept */
+    uint8_t pco[OGS_MAX_PCO_LEN];
+    int pco_len;
+
     test_ue_t *test_ue;
 } test_sess_t;
 
@@ -518,6 +523,9 @@ test_sess_t *test_sess_find_by_apn(
         test_ue_t *test_ue, char *apn, uint8_t rat_type);
 test_sess_t *test_sess_find_by_pti(test_ue_t *test_ue, uint8_t pti);
 test_sess_t *test_sess_find_by_psi(test_ue_t *test_ue, uint8_t psi);
+
+bool test_pco_has_container(const uint8_t *buf, int len,
+        uint16_t id, uint8_t *out_len);
 
 test_bearer_t *test_bearer_add(test_sess_t *sess, uint8_t ebi);
 test_bearer_t *test_qos_flow_add(test_sess_t *sess);

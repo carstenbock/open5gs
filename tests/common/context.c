@@ -1286,6 +1286,30 @@ test_sess_t *test_sess_add_by_dnn_and_psi(
     return sess;
 }
 
+bool test_pco_has_container(const uint8_t *buf, int len,
+        uint16_t id, uint8_t *out_len)
+{
+    ogs_pco_t pco;
+    int i, size;
+
+    if (!buf || len <= 0)
+        return false;
+
+    size = ogs_pco_parse(&pco, (unsigned char *)buf, len);
+    if (size != len)
+        return false;
+
+    for (i = 0; i < pco.num_of_id; i++) {
+        if (pco.ids[i].id == id) {
+            if (out_len)
+                *out_len = pco.ids[i].len;
+            return true;
+        }
+    }
+
+    return false;
+}
+
 void test_sess_remove(test_sess_t *sess)
 {
     test_ue_t *test_ue = NULL;

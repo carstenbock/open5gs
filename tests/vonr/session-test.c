@@ -216,6 +216,10 @@ static void test1_func(abts_case *tc, void *data)
             NGAP_ProcedureCode_id_PDUSessionResourceSetup,
             test_ue->ngap_procedure_code);
 
+    /* internet is not an IMS signalling DNN: do not echo 0x0002 */
+    ABTS_TRUE(tc, !test_pco_has_container(sess->pco, sess->pco_len,
+            OGS_PCO_ID_IM_CN_SUBSYSTEM_SIGNALING_FLAG, NULL));
+
     /* Send GTP-U ICMP Packet */
     qos_flow = test_qos_flow_find_by_qfi(sess, 1);
     ogs_assert(qos_flow);
@@ -268,6 +272,14 @@ static void test1_func(abts_case *tc, void *data)
     recvbuf = testgnb_ngap_read(ngap);
     ABTS_PTR_NOTNULL(tc, recvbuf);
     testngap_recv(test_ue, recvbuf);
+
+    /* IMS DNN: echo 0x0002 with length 0 (TS 24.008 §10.5.6.3) */
+    {
+        uint8_t clen = 0xff;
+        ABTS_TRUE(tc, test_pco_has_container(sess->pco, sess->pco_len,
+                OGS_PCO_ID_IM_CN_SUBSYSTEM_SIGNALING_FLAG, &clen));
+        ABTS_INT_EQUAL(tc, 0, clen);
+    }
 
     /* Send PDUSessionResourceSetupResponse */
     sendbuf = testngap_sess_build_pdu_session_resource_setup_response(sess);

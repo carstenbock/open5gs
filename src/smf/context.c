@@ -151,6 +151,8 @@ void smf_context_final(void)
         ogs_free(self.p_cscf6[i]);
     for (i = 0; i < self.num_of_p_cscf_config; i++)
         ogs_free(self.p_cscf_config[i]);
+    for (i = 0; i < self.num_of_ims_signalling; i++)
+        ogs_free(self.ims_signalling[i].dnn);
 
     if (self.t_p_cscf_refresh)
         ogs_timer_delete(self.t_p_cscf_refresh);
@@ -744,6 +746,65 @@ int smf_context_parse_config(void)
                             ogs_warn("Unknown p-cscf-policy key: %s",
                                     policy_key);
                     }
+
+                } else if (!strcmp(smf_key, "ims_signalling")) {
+                    /* Per-DNN override for PCO 0x0002 (TS 24.008
+                     * §10.5.6.3). `enabled` defaults to true. */
+                    ogs_yaml_iter_t array, iter;
+                    ogs_yaml_iter_recurse(&smf_iter, &array);
+                    do {
+                        const char *dnn = NULL;
+                        bool enabled = true;
+
+                        if (ogs_yaml_iter_type(&array) ==
+                                YAML_MAPPING_NODE) {
+                            memcpy(&iter, &array,
+                                    sizeof(ogs_yaml_iter_t));
+                        } else if (ogs_yaml_iter_type(&array) ==
+                                YAML_SEQUENCE_NODE) {
+                            if (!ogs_yaml_iter_next(&array))
+                                break;
+                            ogs_yaml_iter_recurse(&array, &iter);
+                        } else if (ogs_yaml_iter_type(&array) ==
+                                YAML_SCALAR_NODE) {
+                            break;
+                        } else
+                            ogs_assert_if_reached();
+
+                        while (ogs_yaml_iter_next(&iter)) {
+                            const char *key =
+                                ogs_yaml_iter_key(&iter);
+                            ogs_assert(key);
+                            if (!strcmp(key, "dnn") ||
+                                !strcmp(key, "apn")) {
+                                dnn = ogs_yaml_iter_value(&iter);
+                            } else if (!strcmp(key, "enabled")) {
+                                enabled = ogs_yaml_iter_bool(&iter);
+                            } else
+                                ogs_warn("unknown key `%s`", key);
+                        }
+
+                        if (!dnn) {
+                            ogs_warn("Ignore ims_signalling "
+                                    "entry without dnn");
+                            continue;
+                        }
+                        if (self.num_of_ims_signalling >=
+                                MAX_NUM_OF_IMS_SIGNALLING) {
+                            ogs_warn("Ignore ims_signalling "
+                                    "(max %d): %s",
+                                    MAX_NUM_OF_IMS_SIGNALLING, dnn);
+                            continue;
+                        }
+                        self.ims_signalling[
+                            self.num_of_ims_signalling].dnn =
+                                ogs_strdup(dnn);
+                        self.ims_signalling[
+                            self.num_of_ims_signalling].enabled =
+                                enabled;
+                        self.num_of_ims_signalling++;
+                    } while (ogs_yaml_iter_type(&array) ==
+                            YAML_SEQUENCE_NODE);
 
                 } else if (!strcmp(smf_key, "info")) {
                     ogs_sbi_nf_instance_t *nf_instance = NULL;
@@ -3526,7 +3587,30 @@ static int smf_pco_select_p_cscf(int *out, int num, int *rr_index)
     return num;
 }
 
-int smf_pco_build(uint8_t *pco_buf, uint8_t *buffer, int length)
+/* True if container 0x0002 should be echoed for this session.
+ * An explicit smf.ims_signalling[] entry for the DNN wins;
+ * otherwise QCI/5QI 5 (IMS signalling) is the heuristic. */
+static bool smf_pco_ims_signalling_ack(smf_sess_t *sess)
+{
+    int i;
+    const char *dnn;
+
+    ogs_assert(sess);
+
+    dnn = sess->session.name;
+    if (dnn) {
+        for (i = 0; i < self.num_of_ims_signalling; i++) {
+            if (self.ims_signalling[i].dnn &&
+                !ogs_strcasecmp(self.ims_signalling[i].dnn, dnn))
+                return self.ims_signalling[i].enabled;
+        }
+    }
+
+    return sess->session.qos.index == OGS_QOS_INDEX_5;
+}
+
+int smf_pco_build(smf_sess_t *sess, uint8_t *pco_buf,
+        uint8_t *buffer, int length)
 {
     int rv;
     ogs_pco_t ue, smf;
@@ -3542,6 +3626,7 @@ int smf_pco_build(uint8_t *pco_buf, uint8_t *buffer, int length)
     int i = 0;
     uint16_t mtu = 0;
 
+    ogs_assert(sess);
     ogs_assert(pco_buf);
     ogs_assert(buffer);
     ogs_assert(length);
@@ -3791,6 +3876,35 @@ int smf_pco_build(uint8_t *pco_buf, uint8_t *buffer, int length)
             break;
         case OGS_PCO_ID_P_CSCF_RE_SELECTION_SUPPORT:
             /* TODO */
+            break;
+        case OGS_PCO_ID_IM_CN_SUBSYSTEM_SIGNALING_FLAG:
+            /* TS 24.008 §10.5.6.3: zero-length container. Echo only
+             * when this is an IMS signalling session. TS 24.229 leaves
+             * the UE free to use or deactivate the PDN/PDU if we do
+             * not acknowledge. */
+            if (ue.ids[i].len) {
+                ogs_warn("IM CN Subsystem Signaling Flag "
+                        "has non-zero length [%d]",
+                        ue.ids[i].len);
+                break;
+            }
+            if (smf_pco_ims_signalling_ack(sess)) {
+                ogs_info("Ack IM CN Subsystem Signaling Flag "
+                        "[dnn:%s qos:%d]",
+                        sess->session.name ?
+                            sess->session.name : "",
+                        sess->session.qos.index);
+                smf.ids[smf.num_of_id].id = ue.ids[i].id;
+                smf.ids[smf.num_of_id].len = 0;
+                smf.ids[smf.num_of_id].data = 0;
+                smf.num_of_id++;
+            } else {
+                ogs_info("Do not ack IM CN Subsystem Signaling "
+                        "Flag [dnn:%s qos:%d]",
+                        sess->session.name ?
+                            sess->session.name : "",
+                        sess->session.qos.index);
+            }
             break;
         default:
             ogs_warn("Unknown PCO ID:(0x%x)", ue.ids[i].id);

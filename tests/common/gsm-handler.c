@@ -55,6 +55,19 @@ void testgsm_handle_pdu_session_establishment_accept(test_sess_t *sess,
         }
 
     }
+
+    sess->pco_len = 0;
+    if (pdu_session_establishment_accept->presencemask &
+            OGS_NAS_5GS_PDU_SESSION_ESTABLISHMENT_ACCEPT_EXTENDED_PROTOCOL_CONFIGURATION_OPTIONS_PRESENT) {
+        ogs_nas_extended_protocol_configuration_options_t *epco =
+            &pdu_session_establishment_accept->
+                extended_protocol_configuration_options;
+        sess->pco_len = epco->length;
+        if (sess->pco_len > OGS_MAX_PCO_LEN)
+            sess->pco_len = OGS_MAX_PCO_LEN;
+        if (epco->buffer)
+            memcpy(sess->pco, epco->buffer, sess->pco_len);
+    }
 }
 
 void testgsm_handle_pdu_session_modification_command(test_sess_t *sess,

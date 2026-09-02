@@ -120,6 +120,10 @@ smf:
     - 127.0.0.1
     - ::1
   mtu: 1400
+  # Echo PCO 0x0002 on the IMS DNN (test subscriptions often use
+  # default-bearer QCI 6, so the QCI==5 heuristic would not fire).
+  ims_signalling:
+    - dnn: ims
   freeDiameter:
     identity: smf.localdomain
     realm: localdomain

@@ -156,6 +156,16 @@ typedef struct smf_context_s {
     bool            p_cscf_return_all;
     int             p_cscf_order;
 
+    /* Per-DNN override for PCO container 0x0002 (IM CN Subsystem
+     * Signaling Flag, TS 24.008 §10.5.6.3). A listed DNN wins over the
+     * QCI/5QI==5 heuristic. Unlisted DNNs fall back to that heuristic. */
+#define MAX_NUM_OF_IMS_SIGNALLING       OGS_MAX_NUM_OF_DNN
+    struct {
+        char        *dnn;
+        bool        enabled;
+    } ims_signalling[MAX_NUM_OF_IMS_SIGNALLING];
+    int             num_of_ims_signalling;
+
     ogs_list_t      sgw_s5c_list;   /* SGW GTPC Node List */
     ogs_list_t      ip_pool_list;
 
@@ -837,7 +847,8 @@ smf_pf_t *smf_pf_find_by_flow(
 smf_pf_t *smf_pf_first(smf_bearer_t *bearer);
 smf_pf_t *smf_pf_next(smf_pf_t *pf);
 
-int smf_pco_build(uint8_t *pco_buf, uint8_t *buffer, int length);
+int smf_pco_build(smf_sess_t *sess,
+        uint8_t *pco_buf, uint8_t *buffer, int length);
 
 void smf_qfi_pool_init(smf_sess_t *sess);
 void smf_qfi_pool_final(smf_sess_t *sess);

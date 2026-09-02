@@ -162,6 +162,10 @@ static void test1_func(abts_case *tc, void *data)
     ABTS_PTR_NOTNULL(tc, recvbuf);
     tests1ap_recv(test_ue, recvbuf);
 
+    /* internet is not an IMS signalling APN: do not echo 0x0002 */
+    ABTS_TRUE(tc, !test_pco_has_container(sess->pco, sess->pco_len,
+            OGS_PCO_ID_IM_CN_SUBSYSTEM_SIGNALING_FLAG, NULL));
+
     /* Send UE Capability Info Indication */
     sendbuf = tests1ap_build_ue_radio_capability_info_indication(test_ue);
     ABTS_PTR_NOTNULL(tc, sendbuf);
@@ -218,6 +222,14 @@ static void test1_func(abts_case *tc, void *data)
     ABTS_INT_EQUAL(tc,
             S1AP_ProcedureCode_id_E_RABSetup,
             test_ue->s1ap_procedure_code);
+
+    /* IMS DNN: echo 0x0002 with length 0 (TS 24.008 §10.5.6.3) */
+    {
+        uint8_t clen = 0xff;
+        ABTS_TRUE(tc, test_pco_has_container(sess->pco, sess->pco_len,
+                OGS_PCO_ID_IM_CN_SUBSYSTEM_SIGNALING_FLAG, &clen));
+        ABTS_INT_EQUAL(tc, 0, clen);
+    }
 
     /* Send E-RABSetupResponse */
     bearer = test_bearer_find_by_ue_ebi(test_ue, 6);

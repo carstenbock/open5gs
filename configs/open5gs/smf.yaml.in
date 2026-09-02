@@ -48,6 +48,17 @@ smf:
 #  p-cscf:
 #    - 127.0.0.1
 #    - ::1
+#  Per-DNN override for PCO container 0x0002 (IM CN Subsystem Signaling
+#  Flag, TS 24.008 §10.5.6.3). When the UE includes the flag the SMF
+#  echoes it with length 0 only if this DNN is listed as enabled, or,
+#  if the DNN is not listed, if the default-bearer QoS index is 5.
+#  Acknowledging on a general-purpose APN would promise signalling-only
+#  treatment we do not enforce (TS 24.229).
+#  ims_signalling:
+#    - dnn: ims
+#      enabled: true      # optional, default true
+#    - dnn: internet
+#      enabled: false
 #  ctf:
 #    enabled: auto   # auto(default)|yes|no
   freeDiameter: @sysconfdir@/freeDiameter/smf.conf

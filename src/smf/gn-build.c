@@ -212,7 +212,7 @@ ogs_pkbuf_t *smf_gn_build_create_pdp_context_response(
     /* Protocol Configuration Options (PCO) */
     if (sess->gtp.ue_pco.presence &&
             sess->gtp.ue_pco.len && sess->gtp.ue_pco.data) {
-        pco_len = smf_pco_build(
+        pco_len = smf_pco_build(sess,
                 pco_buf, sess->gtp.ue_pco.data, sess->gtp.ue_pco.len);
         if (pco_len <= 0) {
             ogs_error("smf_pco_build() failed");
@@ -385,7 +385,7 @@ ogs_pkbuf_t *smf_gn_build_delete_pdp_context_response(
     /* PCO */
     if (sess->gtp.ue_pco.presence &&
             sess->gtp.ue_pco.len && sess->gtp.ue_pco.data) {
-        pco_len = smf_pco_build(
+        pco_len = smf_pco_build(sess,
                 pco_buf, sess->gtp.ue_pco.data, sess->gtp.ue_pco.len);
         if (pco_len <= 0) {
             ogs_error("smf_pco_build() failed");
@@ -453,7 +453,7 @@ ogs_pkbuf_t *smf_gn_build_update_pdp_context_response(
     if (!sess->gtp.v1.common_flags.no_qos_negotiation &&
         sess->gtp.ue_pco.presence &&
         sess->gtp.ue_pco.len && sess->gtp.ue_pco.data) {
-        pco_len = smf_pco_build(
+        pco_len = smf_pco_build(sess,
                 pco_buf, sess->gtp.ue_pco.data, sess->gtp.ue_pco.len);
         if (pco_len <= 0) {
             ogs_error("smf_pco_build() failed");
