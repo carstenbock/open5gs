@@ -2606,6 +2606,19 @@ int mme_context_parse_config(void)
                 } else if (!strcmp(mme_key, "emergency")) {
                     ogs_yaml_iter_t emerg_iter;
                     ogs_yaml_iter_recurse(&mme_iter, &emerg_iter);
+
+                    /* Emergency Configuration Data defaults (IR.92: QCI 5 for
+                     * IMS signalling, highest ARP, pre-emption capable but not
+                     * vulnerable). AMBR 0 omits the APN-AMBR IE. */
+                    self.emergency.session.session_type =
+                        OGS_PDU_SESSION_TYPE_IPV4V6;
+                    self.emergency.session.qos.index = OGS_QOS_INDEX_5;
+                    self.emergency.session.qos.arp.priority_level = 1;
+                    self.emergency.session.qos.arp.pre_emption_capability =
+                        OGS_EPC_PRE_EMPTION_ENABLED;
+                    self.emergency.session.qos.arp.pre_emption_vulnerability =
+                        OGS_EPC_PRE_EMPTION_DISABLED;
+
                     while (ogs_yaml_iter_next(&emerg_iter)) {
                         const char *emerg_key = ogs_yaml_iter_key(&emerg_iter);
                         ogs_assert(emerg_key);
@@ -2613,6 +2626,96 @@ int mme_context_parse_config(void)
                                 const char *dnn = ogs_yaml_iter_value(&emerg_iter);
                                 ogs_assert(dnn);
                                 self.emergency.dnn = dnn;
+                                self.emergency.session.name = (char *)dnn;
+                        } else if (!strcmp(emerg_key, "non_3gpp_numbers")) {
+                            self.emergency.non_3gpp_numbers =
+                                ogs_yaml_iter_bool(&emerg_iter);
+                        } else if (!strcmp(emerg_key, "session_type")) {
+                            const char *v = ogs_yaml_iter_value(&emerg_iter);
+                            if (v) {
+                                int session_type = atoi(v);
+                                if (session_type ==
+                                        OGS_PDU_SESSION_TYPE_IPV4 ||
+                                    session_type ==
+                                        OGS_PDU_SESSION_TYPE_IPV6 ||
+                                    session_type ==
+                                        OGS_PDU_SESSION_TYPE_IPV4V6)
+                                    self.emergency.session.session_type =
+                                        session_type;
+                                else
+                                    ogs_warn("invalid session_type `%s`", v);
+                            }
+                        } else if (!strcmp(emerg_key, "qos")) {
+                            ogs_yaml_iter_t qos_iter;
+                            ogs_yaml_iter_recurse(&emerg_iter, &qos_iter);
+                            while (ogs_yaml_iter_next(&qos_iter)) {
+                                const char *qos_key =
+                                    ogs_yaml_iter_key(&qos_iter);
+                                ogs_assert(qos_key);
+                                if (!strcmp(qos_key, "index")) {
+                                    const char *v =
+                                        ogs_yaml_iter_value(&qos_iter);
+                                    if (v)
+                                        self.emergency.session.qos.index =
+                                            atoi(v);
+                                } else if (!strcmp(qos_key, "arp")) {
+                                    ogs_yaml_iter_t arp_iter;
+                                    ogs_yaml_iter_recurse(&qos_iter, &arp_iter);
+                                    while (ogs_yaml_iter_next(&arp_iter)) {
+                                        const char *arp_key =
+                                            ogs_yaml_iter_key(&arp_iter);
+                                        ogs_assert(arp_key);
+                                        if (!strcmp(arp_key,
+                                                    "priority_level")) {
+                                            const char *v =
+                                                ogs_yaml_iter_value(&arp_iter);
+                                            if (v)
+                                                self.emergency.session.qos.
+                                                    arp.priority_level =
+                                                        atoi(v);
+                                        } else if (!strcmp(arp_key,
+                                                    "pre_emption_capability")) {
+                                            self.emergency.session.qos.arp.
+                                                pre_emption_capability =
+                                                ogs_yaml_iter_bool(&arp_iter) ?
+                                                    OGS_EPC_PRE_EMPTION_ENABLED :
+                                                    OGS_EPC_PRE_EMPTION_DISABLED;
+                                        } else if (!strcmp(arp_key,
+                                                "pre_emption_vulnerability")) {
+                                            self.emergency.session.qos.arp.
+                                                pre_emption_vulnerability =
+                                                ogs_yaml_iter_bool(&arp_iter) ?
+                                                    OGS_EPC_PRE_EMPTION_ENABLED :
+                                                    OGS_EPC_PRE_EMPTION_DISABLED;
+                                        } else
+                                            ogs_warn("unknown key `%s`",
+                                                    arp_key);
+                                    }
+                                } else
+                                    ogs_warn("unknown key `%s`", qos_key);
+                            }
+                        } else if (!strcmp(emerg_key, "ambr")) {
+                            ogs_yaml_iter_t ambr_iter;
+                            ogs_yaml_iter_recurse(&emerg_iter, &ambr_iter);
+                            while (ogs_yaml_iter_next(&ambr_iter)) {
+                                const char *ambr_key =
+                                    ogs_yaml_iter_key(&ambr_iter);
+                                ogs_assert(ambr_key);
+                                if (!strcmp(ambr_key, "uplink")) {
+                                    const char *v =
+                                        ogs_yaml_iter_value(&ambr_iter);
+                                    if (v)
+                                        self.emergency.session.ambr.uplink =
+                                            atoll(v);
+                                } else if (!strcmp(ambr_key, "downlink")) {
+                                    const char *v =
+                                        ogs_yaml_iter_value(&ambr_iter);
+                                    if (v)
+                                        self.emergency.session.ambr.downlink =
+                                            atoll(v);
+                                } else
+                                    ogs_warn("unknown key `%s`", ambr_key);
+                            }
                         } else if (!strcmp(emerg_key, "number")) {
                             ogs_yaml_iter_t number_array, number_iter;
                             ogs_yaml_iter_recurse(&emerg_iter, &number_array);

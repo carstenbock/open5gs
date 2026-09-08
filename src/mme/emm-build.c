@@ -24,6 +24,38 @@
 #undef OGS_LOG_DOMAIN
 #define OGS_LOG_DOMAIN __emm_log_domain
 
+/* 9.9.3.37 Emergency Number List (TS 24.301), encoded per 10.5.3.13 in
+ * TS 24.008. Returns true when at least one number was written, so that the
+ * caller can set the presence mask bit of the message it is building. */
+static bool build_emergency_number_list(ogs_nas_emergency_number_list_t *list)
+{
+    mme_emerg_t *emerg = NULL;
+    int o = 0;
+
+    ogs_assert(list);
+
+    ogs_list_for_each(&mme_self()->emerg_list, emerg) {
+        ogs_nas_emergency_number_item_t *item;
+        int len = (strlen(emerg->digits) + 1) >> 1;
+
+        if (o + 2 + len > OGS_NAS_MAX_EMERGENCY_NUMBER_LIST_LEN) {
+            ogs_debug("    Too many list EMERG_NUM_LIST items.");
+            break;
+        }
+        ogs_debug("    EMERG_NUM_LIST[CAT:0x%02x,DIGITS:%s]",
+                emerg->categories, emerg->digits);
+        item = (ogs_nas_emergency_number_item_t *)(list->buffer + o);
+        item->service_category = emerg->categories;
+        ogs_bcd_to_buffer(emerg->digits, item->digits, &len);
+        item->length = 1 + len;
+        o += 2 + len;
+    }
+
+    list->length = o;
+
+    return o > 0;
+}
+
 ogs_pkbuf_t *emm_build_attach_accept(
         mme_ue_t *mme_ue, ogs_pkbuf_t *esmbuf)
 {
@@ -205,27 +237,16 @@ ogs_pkbuf_t *emm_build_attach_accept(
     }
 
     /* Set emergency number(s) */
-    if (!ogs_list_empty(&mme_self()->emerg_list)) {
-        mme_emerg_t *emerg;
-        ogs_nas_emergency_number_item_t *item;
-        int len, o = 0;
-        ogs_list_for_each(&mme_self()->emerg_list, emerg) {
-            len = (strlen(emerg->digits) + 1) >> 1;
-            if (o + 2 + len > OGS_NAS_MAX_EMERGENCY_NUMBER_LIST_LEN) {
-                ogs_debug("    Too many list EMERG_NUM_LIST items.");
-                break;
-            }
-            ogs_debug("    EMERG_NUM_LIST[CAT:0x%02x,DIGITS:%s]",
-                    emerg->categories, emerg->digits);
-            item = (ogs_nas_emergency_number_item_t *)(emerg_numbers->buffer + o);
-            item->service_category = emerg->categories;
-            ogs_bcd_to_buffer(emerg->digits, item->digits, &len);
-            item->length = 1 + len;
-            o += 2 + len;
-        }
+    if (build_emergency_number_list(emerg_numbers) == true)
         attach_accept->presencemask |=
             OGS_NAS_EPS_ATTACH_ACCEPT_EMERGENCY_NUMBER_LIST_PRESENT;
-        emerg_numbers->length = o;
+
+    /* Set non-3GPP NW provided policies */
+    if (mme_self()->emergency.non_3gpp_numbers == true) {
+        attach_accept->presencemask |=
+            OGS_NAS_EPS_ATTACH_ACCEPT_NON__NW_PROVIDED_POLICIES_PRESENT;
+        attach_accept->non__nw_provided_policies.
+            use_of_non_3gpp_emergency_numbers_permitted = 1;
     }
 
     attach_accept->presencemask |=
@@ -693,6 +714,23 @@ ogs_pkbuf_t *emm_build_tau_accept(mme_ue_t *mme_ue)
     }
     tau_accept->eps_network_feature_support.
         extended_protocol_configuration_options = 1;
+    if (mme_self()->emergency.dnn)
+        tau_accept->eps_network_feature_support.
+            emergency_bearer_services_in_s1_mode = 1;
+
+    /* Set emergency number(s). TS 24.301 5.5.3.2.4: the UE replaces its stored
+     * list, so it has to be repeated here for UEs that stay attached. */
+    if (build_emergency_number_list(&tau_accept->emergency_number_list) == true)
+        tau_accept->presencemask |=
+            OGS_NAS_EPS_TRACKING_AREA_UPDATE_ACCEPT_EMERGENCY_NUMBER_LIST_PRESENT;
+
+    /* Set non-3GPP NW provided policies */
+    if (mme_self()->emergency.non_3gpp_numbers == true) {
+        tau_accept->presencemask |=
+            OGS_NAS_EPS_TRACKING_AREA_UPDATE_ACCEPT_NON__NW_POLICIES_PRESENT;
+        tau_accept->non__nw_policies.
+            use_of_non_3gpp_emergency_numbers_permitted = 1;
+    }
 
     return nas_eps_security_encode(mme_ue, &message);
 }

@@ -110,23 +110,32 @@ int esm_handle_pdn_connectivity_request(
     if ((req->presencemask &
             OGS_NAS_EPS_PDN_CONNECTIVITY_REQUEST_ACCESS_POINT_NAME_PRESENT) ||
         emergency) {
-        const char *apn;
         if (emergency) {
-            apn = emergency_dnn;
-            sess->ue_request_type.value = 1;
+            /*
+             * TS 23.401 4.3.12.1: the emergency APN and its QoS profile come
+             * from the MME's Emergency Configuration Data, not from the
+             * subscription, so that emergency bearer services also work for
+             * subscribers without an emergency APN provisioned in the HSS.
+             */
+            sess->emergency = true;
+            memcpy(&mme_ue->emergency_session, &mme_self()->emergency.session,
+                    sizeof(ogs_session_t));
+            sess->session = &mme_ue->emergency_session;
+            sess->ue_request_type.value = OGS_NAS_EPS_REQUEST_TYPE_INITIAL;
+            ogs_debug("    Emergency APN[%s]", emergency_dnn);
         } else {
-            apn = req->access_point_name.apn;
-        }
-        sess->session = mme_session_find_by_apn(mme_ue, apn);
-        if (!sess->session) {
-            /* Invalid APN */
-            r = nas_eps_send_pdn_connectivity_reject(
-                    sess, OGS_NAS_ESM_CAUSE_MISSING_OR_UNKNOWN_APN,
-                    create_action);
-            ogs_expect(r == OGS_OK);
-            ogs_assert(r != OGS_ERROR);
-            ogs_warn("Invalid APN[%s]", apn);
-            return OGS_ERROR;
+            sess->session = mme_session_find_by_apn(
+                    mme_ue, req->access_point_name.apn);
+            if (!sess->session) {
+                /* Invalid APN */
+                r = nas_eps_send_pdn_connectivity_reject(
+                        sess, OGS_NAS_ESM_CAUSE_MISSING_OR_UNKNOWN_APN,
+                        create_action);
+                ogs_expect(r == OGS_OK);
+                ogs_assert(r != OGS_ERROR);
+                ogs_warn("Invalid APN[%s]", req->access_point_name.apn);
+                return OGS_ERROR;
+            }
         }
 
         if (sess->session->session_type == OGS_PDU_SESSION_TYPE_IPV4 ||
@@ -235,8 +244,10 @@ int esm_handle_information_response(
         return OGS_NOTFOUND;
     }
 
-    if (rsp->presencemask &
-            OGS_NAS_EPS_ESM_INFORMATION_RESPONSE_ACCESS_POINT_NAME_PRESENT) {
+    /* An emergency PDN connection is already bound to the locally configured
+     * Emergency Configuration Data, so a UE-supplied APN must not replace it */
+    if (!sess->emergency && (rsp->presencemask &
+            OGS_NAS_EPS_ESM_INFORMATION_RESPONSE_ACCESS_POINT_NAME_PRESENT)) {
         sess->session = mme_session_find_by_apn(
                             mme_ue, rsp->access_point_name.apn);
     }

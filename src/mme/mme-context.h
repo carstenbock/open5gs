@@ -179,6 +179,11 @@ typedef struct mme_context_s {
 
     struct {
         const char *dnn;            /* Emergency APN */
+        bool non_3gpp_numbers;      /* TS 24.301 9.9.3.49 */
+        /* Emergency Configuration Data (TS 23.401 4.3.12.1). Used as the
+         * template for emergency PDN connections, so no HSS subscription
+         * entry for the emergency APN is required. */
+        ogs_session_t session;
     } emergency;
 } mme_context_t;
 
@@ -660,6 +665,10 @@ struct mme_ue_s {
     int num_of_session;
     ogs_session_t session[OGS_MAX_NUM_OF_SESS];
 
+    /* Per-UE copy of the Emergency Configuration Data. Create Session Response
+     * writes back ue_ip/ambr, so the global template must not be shared. */
+    ogs_session_t emergency_session;
+
     /* ESM Info */
     ogs_list_t      sess_list;
 
@@ -947,6 +956,11 @@ typedef struct mme_sess_s {
 
     /* PDN Connectivity Request */
     ogs_nas_request_type_t ue_request_type;
+
+    /* PDN connection for emergency bearer services. ue_request_type.value is
+     * rewritten to INITIAL_REQUEST once the emergency APN has been resolved,
+     * so the original request type cannot be used to detect this later. */
+    bool            emergency;
 
     /* mme_bearer_first(sess) : Default Bearer Context */
     ogs_list_t      bearer_list;
