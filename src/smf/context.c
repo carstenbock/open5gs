@@ -1744,7 +1744,10 @@ smf_sess_t *smf_sess_add_by_gtp1_message(ogs_gtp1_message_t *message)
 
     ogs_gtp1_create_pdp_context_request_t *req = &message->create_pdp_context_request;
 
-    if (req->imsi.presence == 0) {
+    /* An IMSI IE of length 0 is present but empty: without the length check
+     * it reached ogs_assert(imsi_len) in smf_ue_find_by_imsi() and one such
+     * request from a peer aborted the SMF. */
+    if (req->imsi.presence == 0 || req->imsi.len == 0) {
         ogs_error("No IMSI");
         return NULL;
     }
@@ -1824,7 +1827,10 @@ smf_sess_t *smf_sess_add_by_gtp2_message(ogs_gtp2_message_t *message)
 
     ogs_gtp2_create_session_request_t *req = &message->create_session_request;
 
-    if (req->imsi.presence == 0) {
+    /* An IMSI IE of length 0 is present but empty: without the length check
+     * it reached ogs_assert(imsi_len) in smf_ue_find_by_imsi() and one such
+     * request from a peer aborted the SMF. */
+    if (req->imsi.presence == 0 || req->imsi.len == 0) {
         ogs_error("No IMSI");
         return NULL;
     }
