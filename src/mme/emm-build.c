@@ -245,7 +245,7 @@ ogs_pkbuf_t *emm_build_attach_accept(
     if (mme_self()->emergency.non_3gpp_numbers == true) {
         attach_accept->presencemask |=
             OGS_NAS_EPS_ATTACH_ACCEPT_NON__NW_PROVIDED_POLICIES_PRESENT;
-        attach_accept->non__nw_provided_policies.
+        attach_accept->non_nw_provided_policies.
             use_of_non_3gpp_emergency_numbers_permitted = 1;
     }
 
@@ -728,7 +728,7 @@ ogs_pkbuf_t *emm_build_tau_accept(mme_ue_t *mme_ue)
     if (mme_self()->emergency.non_3gpp_numbers == true) {
         tau_accept->presencemask |=
             OGS_NAS_EPS_TRACKING_AREA_UPDATE_ACCEPT_NON__NW_POLICIES_PRESENT;
-        tau_accept->non__nw_policies.
+        tau_accept->non_nw_policies.
             use_of_non_3gpp_emergency_numbers_permitted = 1;
     }
 
