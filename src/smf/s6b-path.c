@@ -482,12 +482,15 @@ static void smf_s6b_aaa_cb(void *data, struct msg **msg)
         ret = fd_msg_avp_hdr(avp, &hdr);
         ogs_assert(ret == 0);
         s6b_message->result_code = hdr->avp_value->i32;
-        if (s6b_message->result_code != ER_DIAMETER_SUCCESS) {
+        /* An error answer is still the answer the session waits for: it
+         * is queued like a success. Dropping it left the session waiting
+         * for ever (no Create/Delete Session Response, KI-62). */
+        if (s6b_message->result_code != ER_DIAMETER_SUCCESS)
             ogs_error("Result Code: %d", s6b_message->result_code);
-            error++;
-        }
     } else {
-        error++;
+        /* Judged as a failure unless an Experimental-Result says more */
+        s6b_message->result_code = ER_DIAMETER_UNABLE_TO_COMPLY;
+        s6b_message->err = &s6b_message->result_code;
 
         ret = fd_msg_search_avp(*msg, ogs_diam_experimental_result, &avp);
         ogs_assert(ret == 0);
@@ -872,12 +875,15 @@ static void smf_s6b_sta_cb(void *data, struct msg **msg)
         ogs_assert(ret == 0);
         s6b_message->result_code = hdr->avp_value->i32;
         s6b_message->err = &s6b_message->result_code;
-        if (s6b_message->result_code != ER_DIAMETER_SUCCESS) {
+        /* An error answer is still the answer the session waits for: it
+         * is queued like a success. Dropping it left the session waiting
+         * for ever (no Create/Delete Session Response, KI-62). */
+        if (s6b_message->result_code != ER_DIAMETER_SUCCESS)
             ogs_error("Result Code: %d", s6b_message->result_code);
-            error++;
-        }
     } else {
-        error++;
+        /* Judged as a failure unless an Experimental-Result says more */
+        s6b_message->result_code = ER_DIAMETER_UNABLE_TO_COMPLY;
+        s6b_message->err = &s6b_message->result_code;
 
         ret = fd_msg_search_avp(*msg, ogs_diam_experimental_result, &avp);
         ogs_assert(ret == 0);
