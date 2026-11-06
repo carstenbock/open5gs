@@ -1,5 +1,24 @@
 # Upstreaming-Plan: carstenbock/open5gs → open5gs/open5gs
 
+> **Status 2026-11-06 (branch `merge-v2.8.0`).** Upstream tag `v2.8.0`
+> (157f611a5) is merged into the fork (merge commit 380d94c1b): it applied
+> without conflicts; one follow-up was needed because the Rel-19 NAS
+> regeneration renamed `non__nw_provided_policies` / `non__nw_policies`
+> (6fab5f686). New merge-base with upstream: `v2.8.0`. Cherry-picked from
+> upstream main on top: `8143162a2` (Gy concurrent state access) and
+> `5c5f3249b` (Session-Id lifetime; PCRF Rx conflict resolved by keeping the
+> fork's IPv6 lookup block, which only runs without a Gx Session-Id).
+> Not picked: `a420fefa1` (handover SIGABRT), which the plan below already
+> lists as fixed upstream. The SMF fixes of this round (session release on
+> rejected/orphaned EPC sessions, S6b error answers, Credit-Control-Failure-
+> Handling) are fork commits on top and candidates for the `gy-fixes` branch
+> below. The numbers in section 1 describe the state before this merge; the
+> fork is now 0 commits behind v2.8.0 and the count against upstream main has
+> to be measured again (section 8). The epc/non3gpp test suites could not be
+> run locally: every freeDiameter instance in the test process binds the
+> wildcard address despite `listen_on` (also before the merge), see volte.io
+> KNOWN_ISSUES.
+
 Stand der Analyse: **10. September 2026**. Upstream ist sehr aktiv — vor Beginn
 der Arbeit die Zahlen unten neu erheben (Kommandos in Abschnitt 8).
 
