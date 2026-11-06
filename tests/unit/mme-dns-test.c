@@ -289,6 +289,9 @@ int main(int argc, const char *const argv[])
     int rv;
 
     ogs_core_initialize();
+    /* The error paths under test log in the MME's domain, which only
+     * mme_context_init() installs; without it ogs_log aborts. */
+    ogs_log_install_domain(&__mme_log_domain, "mme", OGS_LOG_FATAL);
 
     suite = test_mme_dns(suite);
     rv = abts_report(suite);
