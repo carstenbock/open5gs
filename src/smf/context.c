@@ -45,6 +45,7 @@ static void stats_remove_smf_session(smf_sess_t *sess);
 int smf_ctf_config_init(smf_ctf_config_t *ctf_config)
 {
     ctf_config->enabled = SMF_CTF_ENABLED_AUTO;
+    ctf_config->failure_handling = SMF_CTF_FAILURE_HANDLING_TERMINATE;
     return OGS_OK;
 }
 
@@ -617,6 +618,20 @@ int smf_context_parse_config(void)
                             else
                                 ogs_warn("unknown 'enabled' value `%s`",
                                         enabled);
+                        } else if (!strcmp(ctf_key, "failure_handling")) {
+                            const char *fh = ogs_yaml_iter_value(&ctf_iter);
+                            if (fh && !strcmp(fh, "terminate"))
+                                self.ctf_config.failure_handling =
+                                    SMF_CTF_FAILURE_HANDLING_TERMINATE;
+                            else if (fh && !strcmp(fh, "continue"))
+                                self.ctf_config.failure_handling =
+                                    SMF_CTF_FAILURE_HANDLING_CONTINUE;
+                            else if (fh && !strcmp(fh, "retry_and_terminate"))
+                                self.ctf_config.failure_handling =
+                                    SMF_CTF_FAILURE_HANDLING_RETRY_AND_TERMINATE;
+                            else
+                                ogs_warn("unknown 'failure_handling' value `%s`",
+                                        fh ? fh : "");
                         } else
                             ogs_warn("unknown key `%s`", ctf_key);
                     }

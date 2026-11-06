@@ -1780,9 +1780,11 @@ uint8_t smf_n4_handle_session_report_request(
             ogs_warn("[%s:%s] Usage report with no default bearer; "
                     "skipping Gy CCR-Update",
                     smf_ue->imsi_bcd, sess->session.name);
-        } else
-        switch (smf_use_gy_iface()) {
-        case 1:
+        } else if (sess->sm_data.gy_active) {
+            /* Only a session with a Gy session at the OCS is charged online;
+             * one that continues without it (CCFH CONTINUE) is not. Without
+             * a reachable OCS the Diameter stack answers 3002 and the CCA-U
+             * handling applies the session's failure handling. */
             if (!sess->gy.final_unit) {
                 smf_gy_send_ccr(
                         sess, pfcp_xact->id,
@@ -1793,12 +1795,6 @@ uint8_t smf_n4_handle_session_report_request(
                 /* This effectively triggers session release: */
                 cause_value = OGS_PFCP_CAUSE_NO_RESOURCES_AVAILABLE;
             }
-            break;
-        case -1:
-            ogs_error("No Gy Diameter Peer");
-            cause_value = OGS_PFCP_CAUSE_NO_RESOURCES_AVAILABLE;
-            break;
-        /* default: continue below */
         }
     }
 

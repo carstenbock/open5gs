@@ -630,7 +630,7 @@ cleanup:
     return;
 }
 
-void smf_s6b_send_str(smf_sess_t *sess, ogs_gtp_xact_t *xact, uint32_t cause)
+bool smf_s6b_send_str(smf_sess_t *sess, ogs_gtp_xact_t *xact, uint32_t cause)
 {
     int ret;
 
@@ -661,7 +661,13 @@ void smf_s6b_send_str(smf_sess_t *sess, ogs_gtp_xact_t *xact, uint32_t cause)
         h->msg_appl = OGS_DIAM_S6B_APPLICATION_ID;
     }
 
-    ogs_assert(sess->s6b_sid);
+    if (!sess->s6b_sid) {
+        /* No S6b session was established (the AAR failed or was lost). */
+        ogs_error("No S6b Session-Id, STR not sent");
+        ret = fd_msg_free(req);
+        ogs_assert(ret == 0);
+        return false;
+    }
 
     /* Retrieve session by Session-Id */
     sidlen = strlen(sess->s6b_sid);
@@ -676,7 +682,7 @@ void smf_s6b_send_str(smf_sess_t *sess, ogs_gtp_xact_t *xact, uint32_t cause)
         ogs_free(sess->s6b_sid);
         sess->s6b_sid = NULL;
 
-        return;
+        return false;
     }
 
     ogs_debug("    Found S6b Session-Id: [%s]", sess->s6b_sid);
@@ -694,7 +700,7 @@ void smf_s6b_send_str(smf_sess_t *sess, ogs_gtp_xact_t *xact, uint32_t cause)
         ogs_error("No Session Data");
         ret = fd_msg_free(req);
         ogs_assert(ret == 0);
-        return;
+        return false;
     }
     ogs_debug("    Retrieve session: [%s]", sess_data->s6b_sid);
 
@@ -772,6 +778,7 @@ void smf_s6b_send_str(smf_sess_t *sess, ogs_gtp_xact_t *xact, uint32_t cause)
     ogs_assert(pthread_mutex_unlock(&ogs_diam_stats_self()->stats_lock) == 0);
 
     ogs_free(user_name);
+    return true;
 }
 
 static void smf_s6b_sta_cb(void *data, struct msg **msg)
@@ -927,6 +934,9 @@ static void smf_s6b_sta_cb(void *data, struct msg **msg)
 
         e->sess_id = sess->id;
         e->s6b_message = s6b_message;
+        /* The Delete Session waits for this answer when it is the last
+         * one; without the transaction no response was ever sent (KI-62). */
+        e->gtp_xact_id = sess_data->xact_id;
 
         rv = ogs_queue_push(ogs_app()->queue, e);
         if (rv != OGS_OK) {

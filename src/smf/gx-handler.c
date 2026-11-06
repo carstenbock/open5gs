@@ -45,7 +45,7 @@ uint32_t smf_gx_handle_cca_initial_request(
 
     ogs_assert(sess);
     ogs_assert(gx_message);
-    ogs_assert(gtp_xact);
+    /* gtp_xact may have ended; it is not used here */
 
     ogs_debug("[PGW] Create Session Response");
     ogs_debug("    SGW_S5C_TEID[0x%x] PGW_S5C_TEID[0x%x]",

@@ -130,7 +130,7 @@ uint32_t smf_gy_handle_cca_initial_request(
 
     ogs_assert(sess);
     ogs_assert(gy_message);
-    ogs_assert(gtp_xact);
+    /* gtp_xact may have ended; it is not used here */
     ogs_assert(need_termination);
 
     ogs_debug("[Gy CCA Initial]");
@@ -190,7 +190,7 @@ uint32_t smf_gy_handle_cca_update_request(
 
     ogs_assert(sess);
     ogs_assert(gy_message);
-    ogs_assert(pfcp_xact);
+    /* pfcp_xact may have ended; it is not used here */
 
     ogs_debug("[Gy CCA Update]");
     ogs_debug("    SGW_S5C_TEID[0x%x] PGW_S5C_TEID[0x%x]",

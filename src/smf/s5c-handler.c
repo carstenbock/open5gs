@@ -591,17 +591,12 @@ uint8_t smf_s5c_handle_delete_session_request(
     ogs_assert(xact);
     ogs_assert(req);
 
-    if (!ogs_diam_is_relay_or_app_advertised(OGS_DIAM_GX_APPLICATION_ID)) {
-        ogs_error("No Gx Diameter Peer");
-        return OGS_GTP2_CAUSE_REMOTE_PEER_NOT_RESPONDING;
-    }
-
-    if (sess->gtp_rat_type == OGS_GTP2_RAT_TYPE_WLAN) {
-        if (!ogs_diam_is_relay_or_app_advertised(OGS_DIAM_S6B_APPLICATION_ID)) {
-            ogs_error("No S6b Diameter Peer");
-            return OGS_GTP2_CAUSE_REMOTE_PEER_NOT_RESPONDING;
-        }
-    }
+    /*
+     * No check for Gx/S6b peers here: the SGW/ePDG considers the PDN
+     * connection deleted whatever the answer, so a rejection only left the
+     * session in this node (KI-62). The termination requests are sent all
+     * the same; without a peer the Diameter stack answers them itself.
+     */
 
     /* PCO
      * 3GPP TS 29.274 version 10.5.0, Table 7.2.9.1-1

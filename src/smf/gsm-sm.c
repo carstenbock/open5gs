@@ -37,9 +37,37 @@
 #include "fd-path.h"
 #include "local-path.h"
 
+/*
+ * Answers for which RFC 4006 5.7 has the client apply its
+ * Credit-Control-Failure-Handling: the server could not be reached (no
+ * route, too busy, loop). Any other error is the server's decision.
+ *
+ * SPEC-DEVIATION: RFC 4006 5.7 / 13 (Tx timer) -- the failure handling also
+ * applies when no answer arrives within Tx; the SMF has no Tx timer, so only
+ * failures the Diameter stack answers itself (no route, peer down) are
+ * covered. A CCR that is never answered keeps its session waiting.
+ */
+static bool diameter_is_delivery_failure(uint32_t dia_err)
+{
+    switch (dia_err) {
+    case ER_DIAMETER_UNABLE_TO_DELIVER:
+    case ER_DIAMETER_TOO_BUSY:
+    case ER_DIAMETER_LOOP_DETECTED:
+        return true;
+    }
+    return false;
+}
+
 static uint8_t gtp_cause_from_diameter(uint8_t gtp_version,
         const uint32_t dia_err, const uint32_t *dia_exp_err)
 {
+    if (diameter_is_delivery_failure(dia_err)) {
+        /* PCRF, OCS or AAA not reachable: not a refusal of the UE
+         * (TS 29.274 8.4: cause 73 "No resources available"). */
+        return gtp_version == 1 ? OGS_GTP1_CAUSE_NO_RESOURCES_AVAILABLE :
+                                  OGS_GTP2_CAUSE_NO_RESOURCES_AVAILABLE;
+    }
+
     switch (gtp_version) {
     case 1:
         switch (dia_err) {
@@ -70,6 +98,9 @@ static uint8_t gtp_cause_from_diameter(uint8_t gtp_version,
 static void send_gtp_create_err_msg(const smf_sess_t *sess,
         ogs_gtp_xact_t *gtp_xact, uint8_t gtp_cause)
 {
+    /* The transaction ends after its holding time; nobody waits then. */
+    if (!gtp_xact)
+        return;
     if (gtp_xact->gtp_version == 1)
         ogs_gtp1_send_error_message(gtp_xact, sess->sgw_s5c_teid,
             OGS_GTP1_CREATE_PDP_CONTEXT_RESPONSE_TYPE, gtp_cause);
@@ -81,6 +112,8 @@ static void send_gtp_create_err_msg(const smf_sess_t *sess,
 static void send_gtp_delete_err_msg(const smf_sess_t *sess,
         ogs_gtp_xact_t *gtp_xact, uint8_t gtp_cause)
 {
+    if (!gtp_xact)
+        return;
     if (gtp_xact->gtp_version == 1)
         ogs_gtp1_send_error_message(gtp_xact, sess->sgw_s5c_teid,
             OGS_GTP1_DELETE_PDP_CONTEXT_RESPONSE_TYPE, gtp_cause);
@@ -89,75 +122,121 @@ static void send_gtp_delete_err_msg(const smf_sess_t *sess,
             OGS_GTP2_DELETE_SESSION_RESPONSE_TYPE, gtp_cause);
 }
 
+static void send_gtp_delete_rsp(smf_sess_t *sess, ogs_gtp_xact_t *gtp_xact)
+{
+    if (!gtp_xact)
+        return;
+    switch (gtp_xact->gtp_version) {
+    case 1:
+        smf_gtp1_send_delete_pdp_context_response(sess, gtp_xact);
+        break;
+    case 2:
+        smf_gtp2_send_delete_session_response(sess, gtp_xact);
+        break;
+    }
+}
+
+/*
+ * Starts Gx (and Gy) for a new PDN connection. Returns false when the Create
+ * Session was rejected here; the caller releases the session then.
+ */
 static bool send_ccr_init_req_gx_gy(smf_sess_t *sess, ogs_gtp_xact_t *gtp_xact)
 {
     int use_gy = smf_use_gy_iface();
+    ogs_pool_id_t xact_id = gtp_xact ? gtp_xact->id : OGS_INVALID_POOL_ID;
+
+    sess->sm_data.gy_failure_handling =
+        smf_self()->ctf_config.failure_handling;
+    sess->sm_data.gy_retried = false;
 
     if (use_gy == -1) {
-        ogs_error("No Gy Diameter Peer");
-        /* TODO: drop Gx connection here,
-         * possibly move to another "releasing" state! */
-        uint8_t gtp_cause = (gtp_xact->gtp_version == 1) ?
-                OGS_GTP1_CAUSE_NO_RESOURCES_AVAILABLE :
-                OGS_GTP2_CAUSE_UE_NOT_AUTHORISED_BY_OCS_OR_EXTERNAL_AAA_SERVER;
-        send_gtp_create_err_msg(sess, gtp_xact, gtp_cause);
-        return false;
+        if (sess->sm_data.gy_failure_handling ==
+                SMF_CTF_FAILURE_HANDLING_CONTINUE) {
+            /* RFC 4006 5.7 CONTINUE: the service goes on without online
+             * charging when the OCS cannot be reached. */
+            ogs_warn("No Gy Diameter Peer: session without online charging "
+                    "(failure_handling continue)");
+            use_gy = 0;
+        } else {
+            ogs_error("No Gy Diameter Peer");
+            send_gtp_create_err_msg(sess, gtp_xact,
+                gtp_cause_from_diameter(gtp_xact ? gtp_xact->gtp_version : 2,
+                    ER_DIAMETER_UNABLE_TO_DELIVER, NULL));
+            return false;
+        }
     }
 
+    if (!smf_gx_send_ccr(sess, xact_id,
+                OGS_DIAM_GX_CC_REQUEST_TYPE_INITIAL_REQUEST)) {
+        send_gtp_create_err_msg(sess, gtp_xact,
+            gtp_cause_from_diameter(gtp_xact ? gtp_xact->gtp_version : 2,
+                ER_DIAMETER_UNABLE_TO_DELIVER, NULL));
+        return false;
+    }
     sess->sm_data.gx_ccr_init_in_flight = true;
-    smf_gx_send_ccr(
-            sess, gtp_xact ? gtp_xact->id : OGS_INVALID_POOL_ID,
-            OGS_DIAM_GX_CC_REQUEST_TYPE_INITIAL_REQUEST);
 
     if (use_gy == 1) {
         /* Gy is available,
          * set up session for the bearer before accepting it towards the UE */
-        sess->sm_data.gy_ccr_init_in_flight = true;
-        smf_gy_send_ccr(
-                sess, gtp_xact ? gtp_xact->id : OGS_INVALID_POOL_ID,
-                OGS_DIAM_GY_CC_REQUEST_TYPE_INITIAL_REQUEST);
+        if (smf_gy_send_ccr(sess, xact_id,
+                    OGS_DIAM_GY_CC_REQUEST_TYPE_INITIAL_REQUEST))
+            sess->sm_data.gy_ccr_init_in_flight = true;
+        else
+            /* Judged like an OCS that cannot be reached */
+            sess->sm_data.gy_cca_init_err = ER_DIAMETER_UNABLE_TO_DELIVER;
     }
     return true;
 }
 
+/*
+ * Ends the Diameter sessions this PDN connection holds (S6b STR, Gx and Gy
+ * CCR-T). Returns true if at least one answer is awaited. Nothing is refused
+ * here: when no peer can be reached, the Diameter stack answers the request
+ * itself (3002) and the session is released all the same.
+ */
 static bool send_ccr_termination_req_gx_gy_s6b(
         smf_sess_t *sess, ogs_gtp_xact_t *gtp_xact)
 {
-    /* TODO: we should take into account here whether "sess" has an active Gy
-       session created, not whether one was supposedly created as per policy */
-    int use_gy = smf_use_gy_iface();
+    ogs_pool_id_t xact_id = gtp_xact ? gtp_xact->id : OGS_INVALID_POOL_ID;
 
-    if (use_gy == -1) {
-        ogs_error("No Gy Diameter Peer");
-        /* TODO: drop Gx connection here,
-         * possibly move to another "releasing" state! */
-        uint8_t gtp_cause = (gtp_xact->gtp_version == 1) ?
-                OGS_GTP1_CAUSE_NO_RESOURCES_AVAILABLE :
-                OGS_GTP2_CAUSE_UE_NOT_AUTHORISED_BY_OCS_OR_EXTERNAL_AAA_SERVER;
-        send_gtp_delete_err_msg(sess, gtp_xact, gtp_cause);
-        return false;
+    if (sess->gtp_rat_type == OGS_GTP2_RAT_TYPE_WLAN &&
+        sess->sm_data.s6b_active) {
+        sess->sm_data.s6b_active = false;
+        if (smf_s6b_send_str(sess, gtp_xact,
+                    OGS_DIAM_TERMINATION_CAUSE_DIAMETER_LOGOUT))
+            sess->sm_data.s6b_str_in_flight = true;
     }
 
-    if (sess->gtp_rat_type == OGS_GTP2_RAT_TYPE_WLAN) {
-        sess->sm_data.s6b_str_in_flight = true;
-        smf_s6b_send_str(sess, gtp_xact,
-            OGS_DIAM_TERMINATION_CAUSE_DIAMETER_LOGOUT);
+    if (sess->sm_data.gx_active) {
+        sess->sm_data.gx_active = false;
+        if (smf_gx_send_ccr(sess, xact_id,
+                    OGS_DIAM_GX_CC_REQUEST_TYPE_TERMINATION_REQUEST))
+            sess->sm_data.gx_ccr_term_in_flight = true;
     }
 
-    sess->sm_data.gx_ccr_term_in_flight = true;
-    smf_gx_send_ccr(
-            sess, gtp_xact ? gtp_xact->id : OGS_INVALID_POOL_ID,
-            OGS_DIAM_GX_CC_REQUEST_TYPE_TERMINATION_REQUEST);
-
-    if (use_gy == 1) {
-        /* Gy is available,
-         * set up session for the bearer before accepting it towards the UE */
-        sess->sm_data.gy_ccr_term_in_flight = true;
-        smf_gy_send_ccr(
-                sess, gtp_xact ? gtp_xact->id : OGS_INVALID_POOL_ID,
-                OGS_DIAM_GY_CC_REQUEST_TYPE_TERMINATION_REQUEST);
+    if (sess->sm_data.gy_active) {
+        sess->sm_data.gy_active = false;
+        if (smf_gy_send_ccr(sess, xact_id,
+                    OGS_DIAM_GY_CC_REQUEST_TYPE_TERMINATION_REQUEST))
+            sess->sm_data.gy_ccr_term_in_flight = true;
     }
-    return true;
+
+    return sess->sm_data.s6b_str_in_flight ||
+           sess->sm_data.gx_ccr_term_in_flight ||
+           sess->sm_data.gy_ccr_term_in_flight;
+}
+
+/*
+ * A Create Session was rejected, or can no longer be answered: end the
+ * Diameter sessions it opened and release it. The termination requests carry
+ * no GTP transaction, so no second response goes to the SGW/ePDG (KI-8).
+ */
+static void release_after_failed_create(ogs_fsm_t *s, smf_sess_t *sess)
+{
+    if (send_ccr_termination_req_gx_gy_s6b(sess, NULL))
+        OGS_FSM_TRAN(s, smf_gsm_state_wait_epc_auth_release);
+    else
+        OGS_FSM_TRAN(s, smf_gsm_state_session_will_release);
 }
 
 static bool hsmf_update_has_up_cnx_state(smf_sess_t *sess)
@@ -239,6 +318,9 @@ void smf_gsm_state_initial(ogs_fsm_t *s, smf_event_t *e)
         sess->sm_data.s6b_aaa_err = ER_DIAMETER_SUCCESS;
         sess->sm_data.gx_cca_init_err = ER_DIAMETER_SUCCESS;
         sess->sm_data.gy_cca_init_err = ER_DIAMETER_SUCCESS;
+        sess->sm_data.gx_active = false;
+        sess->sm_data.gy_active = false;
+        sess->sm_data.s6b_active = false;
         break;
 
     case OGS_FSM_EXIT_SIG:
@@ -256,10 +338,15 @@ void smf_gsm_state_initial(ogs_fsm_t *s, smf_event_t *e)
                             &e->gtp1_message->create_pdp_context_request);
             if (gtp1_cause != OGS_GTP1_CAUSE_REQUEST_ACCEPTED) {
                 send_gtp_create_err_msg(sess, gtp_xact, gtp1_cause);
+                /* Nothing was opened yet; a rejected request must not leave
+                 * the session (and its UE address) behind (KI-8). */
+                OGS_FSM_TRAN(s, smf_gsm_state_session_will_release);
                 return;
             }
             if (send_ccr_init_req_gx_gy(sess, gtp_xact) == true)
                 OGS_FSM_TRAN(s, smf_gsm_state_wait_epc_auth_initial);
+            else
+                OGS_FSM_TRAN(s, smf_gsm_state_session_will_release);
         }
         break;
 
@@ -275,12 +362,17 @@ void smf_gsm_state_initial(ogs_fsm_t *s, smf_event_t *e)
                             &e->gtp2_message->create_session_request);
             if (gtp2_cause != OGS_GTP2_CAUSE_REQUEST_ACCEPTED) {
                 send_gtp_create_err_msg(sess, gtp_xact, gtp2_cause);
+                /* Nothing was opened yet; a rejected request must not leave
+                 * the session (and its UE address) behind (KI-8). */
+                OGS_FSM_TRAN(s, smf_gsm_state_session_will_release);
                 return;
             }
             switch (sess->gtp_rat_type) {
             case OGS_GTP2_RAT_TYPE_EUTRAN:
                 if (send_ccr_init_req_gx_gy(sess, gtp_xact) == true)
                     OGS_FSM_TRAN(s, smf_gsm_state_wait_epc_auth_initial);
+                else
+                    OGS_FSM_TRAN(s, smf_gsm_state_session_will_release);
                 break;
             case OGS_GTP2_RAT_TYPE_WLAN:
                 smf_s6b_send_aar(sess, gtp_xact);
@@ -479,7 +571,11 @@ void smf_gsm_state_wait_epc_auth_initial(ogs_fsm_t *s, smf_event_t *e)
             sess->sm_data.s6b_aar_in_flight = false;
             sess->sm_data.s6b_aaa_err = s6b_message->result_code;
             if (s6b_message->result_code == ER_DIAMETER_SUCCESS) {
-                send_ccr_init_req_gx_gy(sess, gtp_xact);
+                sess->sm_data.s6b_active = true;
+                if (send_ccr_init_req_gx_gy(sess, gtp_xact) == false)
+                    /* Already rejected towards the ePDG; end the S6b
+                     * session and release. */
+                    release_after_failed_create(s, sess);
                 return;
             }
             goto test_can_proceed;
@@ -495,11 +591,12 @@ void smf_gsm_state_wait_epc_auth_initial(ogs_fsm_t *s, smf_event_t *e)
         case OGS_DIAM_GX_CMD_CODE_CREDIT_CONTROL:
             switch(gx_message->cc_request_type) {
             case OGS_DIAM_GX_CC_REQUEST_TYPE_INITIAL_REQUEST:
-                ogs_assert(gtp_xact);
                 diam_err = smf_gx_handle_cca_initial_request(sess,
                                 gx_message, gtp_xact);
                 sess->sm_data.gx_ccr_init_in_flight = false;
                 sess->sm_data.gx_cca_init_err = diam_err;
+                if (diam_err == ER_DIAMETER_SUCCESS)
+                    sess->sm_data.gx_active = true;
                 goto test_can_proceed;
             }
             break;
@@ -515,10 +612,44 @@ void smf_gsm_state_wait_epc_auth_initial(ogs_fsm_t *s, smf_event_t *e)
         case OGS_DIAM_GY_CMD_CODE_CREDIT_CONTROL:
             switch(gy_message->cc_request_type) {
             case OGS_DIAM_GY_CC_REQUEST_TYPE_INITIAL_REQUEST:
-                ogs_assert(gtp_xact);
                 diam_err = smf_gy_handle_cca_initial_request(sess,
                                 gy_message, gtp_xact, &need_gy_terminate);
                 sess->sm_data.gy_ccr_init_in_flight = false;
+                if (diam_err == ER_DIAMETER_SUCCESS || need_gy_terminate)
+                    sess->sm_data.gy_active = true;
+                /* RFC 4006 5.7: a CCFH the OCS sent applies to this session */
+                if (gy_message->cc_failure_handling_present &&
+                    gy_message->cc_failure_handling <=
+                        SMF_CTF_FAILURE_HANDLING_RETRY_AND_TERMINATE)
+                    sess->sm_data.gy_failure_handling =
+                        gy_message->cc_failure_handling;
+
+                if (diameter_is_delivery_failure(diam_err)) {
+                    switch (sess->sm_data.gy_failure_handling) {
+                    case SMF_CTF_FAILURE_HANDLING_CONTINUE:
+                        ogs_warn("Gy CCA-I %u: session without online "
+                                "charging (CCFH CONTINUE)", diam_err);
+                        sess->sm_data.gy_active = false;
+                        diam_err = ER_DIAMETER_SUCCESS;
+                        break;
+                    case SMF_CTF_FAILURE_HANDLING_RETRY_AND_TERMINATE:
+                        if (!sess->sm_data.gy_retried) {
+                            ogs_warn("Gy CCA-I %u: re-sending CCR-I once "
+                                    "(CCFH RETRY_AND_TERMINATE)", diam_err);
+                            sess->sm_data.gy_retried = true;
+                            if (smf_gy_send_ccr(sess,
+                                    gtp_xact ? gtp_xact->id :
+                                               OGS_INVALID_POOL_ID,
+                                    OGS_DIAM_GY_CC_REQUEST_TYPE_INITIAL_REQUEST)) {
+                                sess->sm_data.gy_ccr_init_in_flight = true;
+                                return;
+                            }
+                        }
+                        break;
+                    default:
+                        break;
+                    }
+                }
                 sess->sm_data.gy_cca_init_err = diam_err;
                 goto test_can_proceed;
             }
@@ -541,31 +672,23 @@ test_can_proceed:
         if (sess->sm_data.gy_cca_init_err != ER_DIAMETER_SUCCESS)
             diam_err = sess->sm_data.gy_cca_init_err;
 
-        if (diam_err == ER_DIAMETER_SUCCESS) {
+        if (diam_err == ER_DIAMETER_SUCCESS && gtp_xact) {
             OGS_FSM_TRAN(s, smf_gsm_state_wait_pfcp_establishment);
-            ogs_assert(gtp_xact);
             ogs_assert(OGS_OK ==
                 smf_epc_pfcp_send_session_establishment_request(
-                    sess,
-                    gtp_xact ? gtp_xact->id : OGS_INVALID_POOL_ID, 0));
+                    sess, gtp_xact->id, 0));
         } else {
-            /* Tear down Gx/Gy session if its sm_data.*init_err == ER_DIAMETER_SUCCESS */
-            if (sess->sm_data.gx_cca_init_err == ER_DIAMETER_SUCCESS) {
-                sess->sm_data.gx_ccr_term_in_flight = true;
-                smf_gx_send_ccr(
-                    sess, gtp_xact ? gtp_xact->id : OGS_INVALID_POOL_ID,
-                    OGS_DIAM_GX_CC_REQUEST_TYPE_TERMINATION_REQUEST);
-            }
-            if (smf_use_gy_iface() == 1 &&
-                (sess->sm_data.gy_cca_init_err == ER_DIAMETER_SUCCESS || need_gy_terminate)) {
-                sess->sm_data.gy_ccr_term_in_flight = true;
-                smf_gy_send_ccr(
-                    sess, gtp_xact ? gtp_xact->id : OGS_INVALID_POOL_ID,
-                    OGS_DIAM_GY_CC_REQUEST_TYPE_TERMINATION_REQUEST);
-            }
-            uint8_t gtp_cause = gtp_cause_from_diameter(
-                                    gtp_xact->gtp_version, diam_err, NULL);
-            send_gtp_create_err_msg(sess, gtp_xact, gtp_cause);
+            if (diam_err == ER_DIAMETER_SUCCESS)
+                /* The answers came after the Create Session transaction
+                 * ended; the SGW/ePDG no longer waits for this session. */
+                ogs_error("Create Session transaction ended before the "
+                        "Diameter answers; releasing the session");
+            else
+                send_gtp_create_err_msg(sess, gtp_xact,
+                    gtp_cause_from_diameter(
+                        gtp_xact ? gtp_xact->gtp_version : 2, diam_err, NULL));
+            /* Ends only the Diameter sessions that were established */
+            release_after_failed_create(s, sess);
         }
     }
 }
@@ -801,16 +924,26 @@ void smf_gsm_state_wait_pfcp_establishment(ogs_fsm_t *s, smf_event_t *e)
             if (pfcp_xact->epc) {
                 ogs_gtp_xact_t *gtp_xact =
                     ogs_gtp_xact_find_by_id(pfcp_xact->assoc_xact_id);
-                ogs_assert(gtp_xact);
 
                 pfcp_cause = smf_epc_n4_handle_session_establishment_response(
                         sess, pfcp_xact,
                         &pfcp_message->pfcp_session_establishment_response);
                 if (pfcp_cause != OGS_PFCP_CAUSE_REQUEST_ACCEPTED) {
-                    /* FIXME: tear down Gy and Gx */
-                    gtp_cause = gtp_cause_from_pfcp(
-                                    pfcp_cause, gtp_xact->gtp_version);
-                    send_gtp_create_err_msg(sess, gtp_xact, gtp_cause);
+                    if (gtp_xact) {
+                        gtp_cause = gtp_cause_from_pfcp(
+                                        pfcp_cause, gtp_xact->gtp_version);
+                        send_gtp_create_err_msg(sess, gtp_xact, gtp_cause);
+                    }
+                    /* No PFCP session: end Gx/Gy/S6b and release */
+                    release_after_failed_create(s, sess);
+                    return;
+                }
+                if (!gtp_xact) {
+                    /* The SGW/ePDG no longer waits for this session: remove
+                     * the PFCP session, then the Diameter sessions. */
+                    ogs_error("Create Session transaction ended before the "
+                            "PFCP session was established; releasing");
+                    OGS_FSM_TRAN(s, smf_gsm_state_wait_pfcp_deletion);
                     return;
                 }
 
@@ -1084,9 +1217,25 @@ void smf_gsm_state_operational(ogs_fsm_t *s, smf_event_t *e)
         case OGS_DIAM_GY_CMD_CODE_CREDIT_CONTROL:
             switch (gy_message->cc_request_type) {
             case OGS_DIAM_GY_CC_REQUEST_TYPE_UPDATE_REQUEST:
-                ogs_assert(pfcp_xact);
+                /* pfcp_xact is NULL when the answer came after the PFCP
+                 * report transaction ended; the handler does not need it. */
                 diam_err = smf_gy_handle_cca_update_request(
                         sess, gy_message, pfcp_xact);
+                if (gy_message->cc_failure_handling_present &&
+                    gy_message->cc_failure_handling <=
+                        SMF_CTF_FAILURE_HANDLING_RETRY_AND_TERMINATE)
+                    sess->sm_data.gy_failure_handling =
+                        gy_message->cc_failure_handling;
+                if (diameter_is_delivery_failure(diam_err) &&
+                    sess->sm_data.gy_failure_handling ==
+                        SMF_CTF_FAILURE_HANDLING_CONTINUE) {
+                    /* RFC 4006 5.7 CONTINUE: keep the session, stop online
+                     * charging for it (no further CCR-U or CCR-T). */
+                    ogs_warn("Gy CCA-U %u: session continues without online "
+                            "charging (CCFH CONTINUE)", diam_err);
+                    sess->sm_data.gy_active = false;
+                    break;
+                }
                 if (diam_err != ER_DIAMETER_SUCCESS)
                     OGS_FSM_TRAN(s, smf_gsm_state_wait_pfcp_deletion);
                 break;
@@ -2327,17 +2476,27 @@ void smf_gsm_state_wait_pfcp_deletion(ogs_fsm_t *s, smf_event_t *e)
                             sess, pfcp_xact,
                             &pfcp_message->pfcp_session_deletion_response);
                 if (pfcp_cause != OGS_PFCP_CAUSE_REQUEST_ACCEPTED) {
-                    /* FIXME: tear down Gy and Gx */
-                    ogs_assert(gtp_xact);
-                    gtp_cause = gtp_cause_from_pfcp(
-                            pfcp_cause, gtp_xact->gtp_version);
-                    send_gtp_delete_err_msg(sess, gtp_xact, gtp_cause);
-                    break;
+                    /* The UPF could not delete its session; the PDN
+                     * connection is released here all the same, since the
+                     * SGW/ePDG has ended it. */
+                    ogs_error("PFCP Session Deletion failed [%d]", pfcp_cause);
+                    if (gtp_xact) {
+                        gtp_cause = gtp_cause_from_pfcp(
+                                pfcp_cause, gtp_xact->gtp_version);
+                        send_gtp_delete_err_msg(sess, gtp_xact, gtp_cause);
+                        gtp_xact = NULL; /* answered */
+                    }
                 }
                 if (send_ccr_termination_req_gx_gy_s6b(
-                            sess, gtp_xact) == true)
+                            sess, gtp_xact) == true) {
                     OGS_FSM_TRAN(s, smf_gsm_state_wait_epc_auth_release);
-                /* else: free session? */
+                } else {
+                    /* No Diameter session to end: answer and release now.
+                     * Before, a Delete Session with no Gy peer was rejected
+                     * here and the session was never removed (KI-62). */
+                    send_gtp_delete_rsp(sess, gtp_xact);
+                    OGS_FSM_TRAN(s, smf_gsm_state_session_will_release);
+                }
             } else {
                 int r, trigger;
 
@@ -3048,6 +3207,8 @@ void smf_gsm_state_wait_epc_auth_release(ogs_fsm_t *s, smf_event_t *e)
     case SMF_EVT_S6B_MESSAGE:
         s6b_message = e->s6b_message;
         ogs_assert(s6b_message);
+
+        gtp_xact = ogs_gtp_xact_find_by_id(e->gtp_xact_id);
 
         switch(s6b_message->cmd_code) {
         case OGS_DIAM_S6B_CMD_SESSION_TERMINATION:

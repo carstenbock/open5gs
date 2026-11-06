@@ -58,8 +58,18 @@ typedef enum {
     SMF_CTF_ENABLED_NO,
 } smf_ctf_enabled_mode_e;
 
+/* Credit-Control-Failure-Handling (RFC 4006 8.18); the values are the AVP's. */
+typedef enum {
+    SMF_CTF_FAILURE_HANDLING_TERMINATE = 0,
+    SMF_CTF_FAILURE_HANDLING_CONTINUE = 1,
+    SMF_CTF_FAILURE_HANDLING_RETRY_AND_TERMINATE = 2,
+} smf_ctf_failure_handling_e;
+
 typedef struct smf_ctf_config_s {
     smf_ctf_enabled_mode_e enabled;
+    /* What to do when the OCS cannot be reached; a CCFH AVP the OCS sends
+     * in the CCA overrides it for that session. */
+    smf_ctf_failure_handling_e failure_handling;
 } smf_ctf_config_t;
 
 int smf_ctf_config_init(smf_ctf_config_t *ctf_config);
@@ -329,6 +339,14 @@ typedef struct smf_sess_s {
         uint32_t gy_cca_term_err; /* Gy CCA RXed error code */
         bool s6b_str_in_flight; /* Waiting for S6B CCA */
         uint32_t s6b_sta_err; /* S6B CCA RXed error code */
+        /* Diameter sessions this PDN connection holds; termination sends
+         * CCR-T/STR only for these. */
+        bool gx_active;
+        bool gy_active;
+        bool s6b_active;
+        /* Effective Credit-Control-Failure-Handling of the Gy session */
+        smf_ctf_failure_handling_e gy_failure_handling;
+        bool gy_retried; /* CCR-I re-sent once (RETRY_AND_TERMINATE) */
     } sm_data;
 
     bool            epc;            /**< EPC or 5GC */

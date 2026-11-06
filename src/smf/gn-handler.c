@@ -337,10 +337,7 @@ uint8_t smf_gn_handle_delete_pdp_context_request(
 {
     ogs_debug("Delete PDP Context Request");
 
-    if (!ogs_diam_is_relay_or_app_advertised(OGS_DIAM_GX_APPLICATION_ID)) {
-        ogs_error("No Gx Diameter Peer");
-        return OGS_GTP1_CAUSE_NO_RESOURCES_AVAILABLE;
-    }
+    /* No check for a Gx peer: see smf_s5c_handle_delete_session_request() */
 
     /* PCO */
     if (req->protocol_configuration_options.presence) {

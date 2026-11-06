@@ -38,6 +38,7 @@ extern "C" {
 #define OGS_DIAM_GY_AVP_CODE_CC_OUTPUT_OCTETS               (414)
 #define OGS_DIAM_GY_AVP_CODE_CC_REQUEST_NUMBER              (415)
 #define OGS_DIAM_GY_AVP_CODE_CC_REQUEST_TYPE                (416)
+#define OGS_DIAM_GY_AVP_CODE_CREDIT_CONTROL_FAILURE_HANDLING (427)
 #define OGS_DIAM_GY_AVP_CODE_CC_TIME                        (420)
 #define OGS_DIAM_GY_AVP_CODE_CC_TOTAL_OCTETS                (421)
 #define OGS_DIAM_GY_AVP_CODE_FINAL_UNIT_INDICATION          (430)
@@ -184,6 +185,10 @@ typedef struct ogs_diam_gy_message_s {
     uint32_t            result_code;
     uint32_t            *err;
     uint32_t            *exp_err;
+
+    /* Credit-Control-Failure-Handling of the CCA (RFC 4006 8.18), if present */
+    bool                cc_failure_handling_present;
+    uint32_t            cc_failure_handling;
 
 #define OGS_DIAM_GY_CC_REQUEST_TYPE_INITIAL_REQUEST                 1
 #define OGS_DIAM_GY_CC_REQUEST_TYPE_UPDATE_REQUEST                  2

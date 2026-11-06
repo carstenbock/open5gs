@@ -93,7 +93,7 @@ static void state_cleanup(struct sess_state *sess_data, os0_t sid, void *opaque)
 }
 
 /* 3GPP TS 29.212 5.6.2 Credit-Control-Request */
-void smf_gx_send_ccr(smf_sess_t *sess, ogs_pool_id_t xact_id,
+bool smf_gx_send_ccr(smf_sess_t *sess, ogs_pool_id_t xact_id,
         uint32_t cc_request_type)
 {
     int ret;
@@ -147,7 +147,7 @@ void smf_gx_send_ccr(smf_sess_t *sess, ogs_pool_id_t xact_id,
             ogs_free(sess->gx_sid);
             sess->gx_sid = NULL;
 
-            return;
+            return false;
         }
 
         ogs_debug("    Found Gx Session-Id: [%s]", sess->gx_sid);
@@ -186,7 +186,7 @@ void smf_gx_send_ccr(smf_sess_t *sess, ogs_pool_id_t xact_id,
             ogs_error("Gx session state unavailable [%s]", sess->gx_sid);
             ret = fd_msg_free(req);
             ogs_assert(ret == 0);
-            return;
+            return false;
         }
 
         ret = fd_sess_getsid(session, &sid, &sidlen);
@@ -767,6 +767,7 @@ void smf_gx_send_ccr(smf_sess_t *sess, ogs_pool_id_t xact_id,
     ogs_assert(pthread_mutex_lock(&ogs_diam_stats_self()->stats_lock) == 0);
     ogs_diam_stats_self()->stats.nb_sent++;
     ogs_assert(pthread_mutex_unlock(&ogs_diam_stats_self()->stats_lock) == 0);
+    return true;
 }
 
 /* 3GPP TS 29.212 5b.6.5 Credit-Control-Answer */

@@ -680,7 +680,7 @@ static void fill_service_information_ccr(smf_sess_t *sess,
 }
 
 /* 3GPP TS 32.299  6.4.2 Credit-Control-Request message */
-void smf_gy_send_ccr(smf_sess_t *sess, ogs_pool_id_t xact_id,
+bool smf_gy_send_ccr(smf_sess_t *sess, ogs_pool_id_t xact_id,
         uint32_t cc_request_type)
 {
 
@@ -713,6 +713,12 @@ void smf_gy_send_ccr(smf_sess_t *sess, ogs_pool_id_t xact_id,
         ret = fd_msg_hdr(req, &h);
         ogs_assert(ret == 0);
         h->msg_appl = OGS_DIAM_GY_APPLICATION_ID;
+        /* RFC 4006 5.7 RETRY_AND_TERMINATE: the re-sent CCR-I carries the
+         * same Session-Id and CC-Request-Number and the T flag (RFC 6733
+         * 3: potentially retransmitted). */
+        if (cc_request_type == OGS_DIAM_GY_CC_REQUEST_TYPE_INITIAL_REQUEST &&
+            sess->sm_data.gy_retried)
+            h->msg_flags |= CMD_FLAG_RETRANSMIT;
     }
 
     /* Find Diameter Gy Session */
@@ -730,7 +736,7 @@ void smf_gy_send_ccr(smf_sess_t *sess, ogs_pool_id_t xact_id,
             ogs_free(sess->gy_sid);
             sess->gy_sid = NULL;
 
-            return;
+            return false;
         }
 
         ogs_debug("    Found Gy Session-Id: [%s]", sess->gy_sid);
@@ -768,7 +774,7 @@ void smf_gy_send_ccr(smf_sess_t *sess, ogs_pool_id_t xact_id,
             ogs_error("Gy session state unavailable [%s]", sess->gy_sid);
             ret = fd_msg_free(req);
             ogs_assert(ret == 0);
-            return;
+            return false;
         }
 
         ret = fd_sess_getsid(session, &sid, &sidlen);
@@ -1053,6 +1059,7 @@ void smf_gy_send_ccr(smf_sess_t *sess, ogs_pool_id_t xact_id,
     ogs_assert(pthread_mutex_lock(&ogs_diam_stats_self()->stats_lock) == 0);
     ogs_diam_stats_self()->stats.nb_sent++;
     ogs_assert(pthread_mutex_unlock(&ogs_diam_stats_self()->stats_lock) == 0);
+    return true;
 }
 
 static void smf_gy_cca_cb(void *data, struct msg **msg)
@@ -1279,6 +1286,10 @@ static void smf_gy_cca_cb(void *data, struct msg **msg)
         case OGS_DIAM_GY_AVP_CODE_CC_REQUEST_TYPE:
         case OGS_DIAM_GY_AVP_CODE_CC_REQUEST_NUMBER:
         case OGS_DIAM_GY_AVP_CODE_SUPPORTED_FEATURES:
+            break;
+        case OGS_DIAM_GY_AVP_CODE_CREDIT_CONTROL_FAILURE_HANDLING:
+            gy_message->cc_failure_handling = hdr->avp_value->u32;
+            gy_message->cc_failure_handling_present = true;
             break;
         case OGS_DIAM_GY_AVP_CODE_MULTIPLE_SERVICES_CREDIT_CONTROL:
             ret = fd_msg_browse(avp, MSG_BRW_FIRST_CHILD, &avpch1, NULL);
