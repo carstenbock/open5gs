@@ -171,6 +171,7 @@ void upf_pfcp_state_associated(ogs_fsm_t *s, upf_event_t *e)
     case OGS_FSM_ENTRY_SIG:
         ogs_info("PFCP associated %s",
                 ogs_sockaddr_to_string_static(node->addr_list));
+        node->associated_at = ogs_get_monotonic_time();
         ogs_timer_start(node->t_no_heartbeat,
                 ogs_local_conf()->time.message.pfcp.no_heartbeat_duration);
         ogs_assert(OGS_OK ==
@@ -259,6 +260,9 @@ void upf_pfcp_state_associated(ogs_fsm_t *s, upf_event_t *e)
         case OGS_PFCP_ASSOCIATION_SETUP_REQUEST_TYPE:
             ogs_warn("PFCP[REQ] re-association while associated %s",
                 ogs_sockaddr_to_string_static(node->addr_list));
+            /* A restarted SMF on the same address: the state does not
+             * change, so the entry action does not run again (KI-125). */
+            node->associated_at = ogs_get_monotonic_time();
             ogs_pfcp_up_handle_association_setup_request(node, xact,
                     &message->pfcp_association_setup_request);
             OGS_FSM_TRAN(s, upf_pfcp_state_associated);
@@ -311,6 +315,28 @@ void upf_pfcp_state_associated(ogs_fsm_t *s, upf_event_t *e)
         }
         break;
     case UPF_EVT_N4_NO_HEARTBEAT:
+        /*
+         * KI-125: a heartbeat sent to the previous SMF instance (e.g. during
+         * a PGW-C restart on the same address) can time out shortly after
+         * the new instance has associated. Treating that as a path failure
+         * de-associated the UP while the SMF still considered itself
+         * associated, and every PFCP Session Establishment was rejected until
+         * the next SMF restart. A heartbeat transaction lives at most
+         * time.message.duration, so a timeout within that time after the
+         * (re-)association belongs to a heartbeat sent before it. The
+         * heartbeat timer is only restarted by a Heartbeat Response, so
+         * restart it here: the next heartbeat goes to the new instance and
+         * still detects a real failure.
+         */
+        if (ogs_get_monotonic_time() - node->associated_at <
+                ogs_local_conf()->time.message.duration) {
+            ogs_warn("Ignoring heartbeat timeout from before the "
+                    "(re-)association %s",
+                    ogs_sockaddr_to_string_static(node->addr_list));
+            ogs_timer_start(node->t_no_heartbeat,
+                ogs_local_conf()->time.message.pfcp.no_heartbeat_duration);
+            break;
+        }
         ogs_warn("No Heartbeat from SMF %s",
                 ogs_sockaddr_to_string_static(node->addr_list));
         /*

@@ -130,6 +130,9 @@ typedef struct ogs_pfcp_node_s {
 
     uint32_t        remote_recovery; /* UTC time */
     bool            restoration_required;
+    /* Monotonic time of the last (re-)association; a UP node ignores the
+     * timeout of a heartbeat sent before it (KI-125). */
+    ogs_time_t      associated_at;
 
     ogs_pfcp_up_function_features_t up_function_features;
     int up_function_features_len;
