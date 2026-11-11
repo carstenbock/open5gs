@@ -798,6 +798,7 @@ smf_sess_t *smf_sess_add_by_pdu_session(ogs_sbi_message_t *message);
 smf_sess_t *smf_sess_add_by_psi(smf_ue_t *smf_ue, uint8_t psi);
 
 void smf_sess_select_upf(smf_sess_t *sess);
+void smf_sess_select_upf_by_ue_ip(smf_sess_t *sess);
 uint8_t smf_sess_set_ue_ip(smf_sess_t *sess);
 void smf_sess_set_paging_n1n2message_location(
         smf_sess_t *sess, char *n1n2message_location);

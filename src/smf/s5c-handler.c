@@ -337,6 +337,10 @@ uint8_t smf_s5c_handle_create_session_request(
         }
     }
 
+    /* A given UE address (reused above, or an ePDG-supplied PAA) pins the
+     * session to the UPF that owns it, or its downlink is lost (KI-107). */
+    smf_sess_select_upf_by_ue_ip(sess);
+
     /* Set UE IP Address */
     rv = smf_sess_set_ue_ip(sess);
     if (rv != OGS_PFCP_CAUSE_REQUEST_ACCEPTED) {

@@ -1688,6 +1688,77 @@ void smf_sess_select_upf(smf_sess_t *sess)
     }
 }
 
+static bool upf_node_owns_addr(ogs_pfcp_node_t *node, int family,
+        const uint32_t *addr)
+{
+    int i, k, words = family == AF_INET ? 1 : 4;
+
+    for (i = 0; i < node->num_of_ue_subnet; i++) {
+        bool contained = true;
+
+        if (node->ue_subnet[i].family != family)
+            continue;
+        for (k = 0; k < words; k++) {
+            if ((addr[k] & node->ue_subnet[i].mask[k]) !=
+                    node->ue_subnet[i].sub[k]) {
+                contained = false;
+                break;
+            }
+        }
+        if (contained)
+            return true;
+    }
+    return false;
+}
+
+/*
+ * A session whose UE address is given in advance (reused from the other
+ * access on a 3GPP<->non-3GPP handover, or a PAA supplied by the ePDG) must
+ * be anchored on the UPF that owns that address: the UE subnet is routed to
+ * that UPF only, so a session on another UPF keeps its uplink but loses all
+ * downlink (KI-107: IMS REGISTER answers never reached the UE for hours).
+ * Moves the session to the owning UPF; leaves it alone when the selected UPF
+ * already owns the address, when no address is given, or when no associated
+ * UPF declares a subnet containing it (pfcp.client.upf[].subnet).
+ */
+void smf_sess_select_upf_by_ue_ip(smf_sess_t *sess)
+{
+    static const uint8_t zero6[OGS_IPV6_LEN] = { 0 };
+    ogs_pfcp_node_t *node = NULL;
+    uint32_t addr[4];
+    int family;
+    char buf[OGS_ADDRSTRLEN];
+
+    ogs_assert(sess);
+
+    if (sess->session.ue_ip.ipv4 && sess->session.ue_ip.addr != 0) {
+        family = AF_INET;
+        addr[0] = sess->session.ue_ip.addr;
+    } else if (sess->session.ue_ip.ipv6 &&
+            memcmp(sess->session.ue_ip.addr6, zero6, OGS_IPV6_LEN) != 0) {
+        family = AF_INET6;
+        memcpy(addr, sess->session.ue_ip.addr6, OGS_IPV6_LEN);
+    } else {
+        return;
+    }
+
+    if (sess->pfcp_node && upf_node_owns_addr(sess->pfcp_node, family, addr))
+        return;
+
+    ogs_list_for_each(&ogs_pfcp_self()->pfcp_peer_list, node) {
+        if (OGS_FSM_CHECK(&node->sm, smf_pfcp_state_associated) &&
+                upf_node_owns_addr(node, family, addr)) {
+            OGS_SETUP_PFCP_NODE(sess, node);
+            ogs_info("UE IP %s is owned by UPF %s; anchoring the session there",
+                    family == AF_INET ?
+                        OGS_INET_NTOP(&addr[0], buf) :
+                        OGS_INET6_NTOP(addr, buf),
+                    ogs_sockaddr_to_string_static(node->addr_list));
+            return;
+        }
+    }
+}
+
 smf_sess_t *smf_sess_add_by_apn(smf_ue_t *smf_ue, char *apn, uint8_t rat_type)
 {
     smf_event_t e;
