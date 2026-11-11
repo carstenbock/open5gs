@@ -2331,6 +2331,31 @@ void smf_gsm_state_operational(ogs_fsm_t *s, smf_event_t *e)
         smf_ue = smf_ue_find_by_id(sess->smf_ue_id);
         ogs_assert(smf_ue);
 
+        if (sess->epc) {
+            /*
+             * PGW-initiated bearer deactivation of the default bearer, i.e.
+             * PDN disconnection (TS 23.401 5.4.4.1, TS 29.274 7.2.9.1);
+             * used by the shutdown drain (KI-119). The session stays here
+             * until the Delete Bearer Response, which leads to
+             * smf_gsm_state_wait_pfcp_deletion like any other release.
+             */
+            smf_bearer_t *bearer = smf_default_bearer_in_sess(sess);
+            if (!bearer) {
+                ogs_error("[%s:%s] No default bearer",
+                        smf_ue->imsi_bcd, sess->session.name);
+                break;
+            }
+
+            ogs_info("[%s:%s] Delete Bearer Request [EBI:%d] "
+                    "[Cause:Reactivation requested]",
+                    smf_ue->imsi_bcd, sess->session.name, bearer->ebi);
+            r = smf_gtp2_send_delete_bearer_request(bearer,
+                    OGS_NAS_PROCEDURE_TRANSACTION_IDENTITY_UNASSIGNED,
+                    OGS_GTP2_CAUSE_REACTIVATION_REQUESTED);
+            ogs_expect(r == OGS_OK);
+            break;
+        }
+
         ogs_info("[%s:%d] Session Release [PFCP-Delete-Trigger:%d]",
             smf_ue->supi, sess->psi, e->h.sbi.state);
 

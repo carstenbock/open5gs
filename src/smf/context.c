@@ -77,6 +77,7 @@ void smf_context_init(void)
     memset(&self, 0, sizeof(smf_context_t));
     smf_ctf_config_init(&self.ctf_config);
     self.diam_config = &g_diam_conf;
+    self.shutdown_drain_timeout = ogs_time_from_sec(15);
 
     ogs_log_install_domain(&__ogs_ngap_domain, "ngap", ogs_core()->log.level);
     ogs_log_install_domain(&__ogs_nas_domain, "nas", ogs_core()->log.level);
@@ -157,6 +158,8 @@ void smf_context_final(void)
 
     if (self.t_p_cscf_refresh)
         ogs_timer_delete(self.t_p_cscf_refresh);
+    if (self.t_shutdown_drain)
+        ogs_timer_delete(self.t_shutdown_drain);
 
     ogs_pool_final(&smf_gtp_node_pool);
 
@@ -727,6 +730,14 @@ int smf_context_parse_config(void)
                     const char *v = ogs_yaml_iter_value(&smf_iter);
                     if (v)
                         self.p_cscf_refresh_interval =
+                            ogs_time_from_sec(atoi(v));
+
+                } else if (!strcmp(smf_key, "shutdown_drain_timeout")) {
+                    /* Seconds to wait on SIGTERM for the EPC sessions to
+                     * be released (default 15, 0 = exit at once). */
+                    const char *v = ogs_yaml_iter_value(&smf_iter);
+                    if (v)
+                        self.shutdown_drain_timeout =
                             ogs_time_from_sec(atoi(v));
 
                 } else if (!strcmp(smf_key, "p-cscf-policy")) {

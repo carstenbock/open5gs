@@ -26,6 +26,7 @@
 #include "ogs-metrics.h"
 #include "metrics/prometheus/json_pager.h"
 #include "pdu-info.h"
+#include "local-path.h"
 
 static ogs_thread_t *thread;
 static void smf_main(void *data);
@@ -125,9 +126,40 @@ static void event_termination(void)
     ogs_pollset_notify(ogs_app()->pollset);
 }
 
+/*
+ * Shutdown drain (KI-119, see local-path.c): the event loop releases the EPC
+ * sessions while this thread waits. It runs before event_termination(), so
+ * the 5 s limit of ogs_thread_destroy() starts only after the drain. The
+ * event loop ends the drain itself at `shutdown_drain_timeout`; the extra
+ * second here only guards against an event loop that does not answer.
+ */
+static void drain_sessions(void)
+{
+    ogs_time_t deadline;
+
+    if (smf_self()->shutdown_drain_timeout <= 0) {
+        ogs_info("Shutdown drain disabled");
+        return;
+    }
+
+    smf_drain_request();
+
+    deadline = ogs_get_monotonic_time() +
+        smf_self()->shutdown_drain_timeout + ogs_time_from_sec(1);
+    while (!smf_drain_finished()) {
+        if (ogs_get_monotonic_time() > deadline) {
+            ogs_error("Shutdown drain: no answer from the event loop");
+            break;
+        }
+        ogs_usleep(10 * 1000);
+    }
+}
+
 void smf_terminate(void)
 {
     if (!initialized) return;
+
+    drain_sessions();
 
     /* Daemon terminating */
     event_termination();

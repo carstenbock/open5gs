@@ -66,6 +66,8 @@ typedef enum {
 
     SMF_EVT_P_CSCF_REFRESH,
 
+    SMF_EVT_SHUTDOWN_DRAIN,
+
     SMF_EVT_TOP,
 
 } smf_event_e;

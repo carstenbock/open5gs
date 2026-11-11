@@ -32,6 +32,7 @@
 #include "npcf-handler.h"
 #include "nsmf-handler.h"
 #include "binding.h"
+#include "local-path.h"
 
 void smf_state_initial(ogs_fsm_t *s, smf_event_t *e)
 {
@@ -149,6 +150,20 @@ void smf_state_operational(ogs_fsm_t *s, smf_event_t *e)
         case OGS_GTP2_CREATE_SESSION_REQUEST_TYPE:
             smf_metrics_inst_global_inc(SMF_METR_GLOB_CTR_S5C_RX_CREATESESSIONREQ);
             smf_metrics_inst_gtp_node_inc(smf_gnode->metrics, SMF_METR_GTP_NODE_CTR_S5C_RX_CREATESESSIONREQ);
+            if (smf_self()->draining) {
+                /* Shutdown drain (KI-119): this SMF is about to exit, so a
+                 * new PDN connection would be lost at once. "No resources
+                 * available" (TS 29.274 Table 8.4-1) is a temporary
+                 * rejection; the UE retries later, by then towards the
+                 * restarted SMF. */
+                ogs_warn("Shutdown drain: Create Session Request rejected");
+                ogs_gtp2_send_error_message(gtp_xact,
+                        gtp2_sender_f_teid.teid_presence == true ?
+                            gtp2_sender_f_teid.teid : 0,
+                        OGS_GTP2_CREATE_SESSION_RESPONSE_TYPE,
+                        OGS_GTP2_CAUSE_NO_RESOURCES_AVAILABLE);
+                break;
+            }
             if (gtp2_message.h.teid == 0) {
                 ogs_expect(!sess);
                 sess = smf_sess_add_by_gtp2_message(&gtp2_message);
@@ -1460,6 +1475,10 @@ void smf_state_operational(ogs_fsm_t *s, smf_event_t *e)
         }
 
         ogs_fsm_dispatch(&sess->sm, e);
+        break;
+
+    case SMF_EVT_SHUTDOWN_DRAIN:
+        smf_drain_start();
         break;
 
     case SMF_EVT_P_CSCF_REFRESH:

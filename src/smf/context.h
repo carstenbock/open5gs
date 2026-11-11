@@ -155,6 +155,13 @@ typedef struct smf_context_s {
     ogs_time_t      p_cscf_refresh_interval;
     ogs_timer_t     *t_p_cscf_refresh;
 
+    /* Shutdown drain (KI-119): on SIGTERM the EPC sessions are released
+     * towards the SGW before the SMF exits (0 = disabled). While draining,
+     * new Create Session Requests are rejected. */
+    ogs_time_t      shutdown_drain_timeout;
+    bool            draining;
+    ogs_timer_t     *t_shutdown_drain;
+
     /* P-CSCF provisioning policy for the address(es) returned in PCO/ePCO
      * (Gm) at PDP/PDU session establishment.
      *   p_cscf_return_all = false (default): one address per session.

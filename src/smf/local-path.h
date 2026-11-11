@@ -29,6 +29,11 @@ extern "C" {
 void smf_trigger_session_release(smf_sess_t *sess,
     ogs_sbi_stream_t *stream, int pfcp_trigger);
 
+/* Shutdown drain (KI-119) */
+void smf_drain_request(void);   /* any thread */
+bool smf_drain_finished(void);  /* any thread */
+void smf_drain_start(void);     /* SMF event loop */
+
 #ifdef __cplusplus
 }
 #endif

@@ -83,6 +83,9 @@ const char *smf_event_get_name(smf_event_t *e)
     case SMF_EVT_P_CSCF_REFRESH:
         return "SMF_EVT_P_CSCF_REFRESH";
 
+    case SMF_EVT_SHUTDOWN_DRAIN:
+        return "SMF_EVT_SHUTDOWN_DRAIN";
+
     default:
        break;
     }
