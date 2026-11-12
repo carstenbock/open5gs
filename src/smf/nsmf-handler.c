@@ -291,6 +291,7 @@ bool smf_nsmf_handle_create_sm_context(
 
     smf_metrics_inst_by_slice_add(&sess->serving_plmn_id, &sess->s_nssai,
             SMF_METR_GAUGE_SM_SESSIONNBR, 1);
+    sess->sessionnbr_counted = true;
     smf_metrics_inst_by_slice_add(&sess->serving_plmn_id, &sess->s_nssai,
             SMF_METR_CTR_SM_PDUSESSIONCREATIONREQ, 1);
 
@@ -1633,6 +1634,7 @@ bool smf_nsmf_handle_create_data_in_hsmf(
 
     smf_metrics_inst_by_slice_add(&sess->serving_plmn_id, &sess->s_nssai,
             SMF_METR_GAUGE_SM_SESSIONNBR, 1);
+    sess->sessionnbr_counted = true;
     smf_metrics_inst_by_slice_add(&sess->serving_plmn_id, &sess->s_nssai,
             SMF_METR_CTR_SM_PDUSESSIONCREATIONREQ, 1);
 

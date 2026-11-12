@@ -159,6 +159,12 @@ typedef struct smf_context_s {
      * towards the SGW before the SMF exits (0 = disabled). While draining,
      * new Create Session Requests are rejected. */
     ogs_time_t      shutdown_drain_timeout;
+    /*
+     * Own GTP-C restart counter, TS 23.007 §18 / TS 29.274 §8.17 (KI-123).
+     * Not persisted: derived from the start time, so it changes with every
+     * restart that is not a multiple of 256 s after the previous one.
+     */
+    uint8_t         gtpc_restart_counter;
     bool            draining;
     ogs_timer_t     *t_shutdown_drain;
 
@@ -246,8 +252,9 @@ typedef struct smf_ue_s {
         ogs_assert(__sESS); \
         smf_ue = smf_ue_find_by_id((__sESS)->smf_ue_id); \
         ogs_assert(smf_ue); \
-        smf_metrics_inst_by_slice_add(&(__sESS)->serving_plmn_id, \
-                &(__sESS)->s_nssai, SMF_METR_GAUGE_SM_SESSIONNBR, -1); \
+        if ((__sESS)->sessionnbr_counted) \
+            smf_metrics_inst_by_slice_add(&(__sESS)->serving_plmn_id, \
+                    &(__sESS)->s_nssai, SMF_METR_GAUGE_SM_SESSIONNBR, -1); \
         if (SMF_UE_IS_LAST_SESSION(smf_ue)) \
             smf_ue_remove(smf_ue); \
         else \
@@ -279,6 +286,9 @@ ED3(uint8_t spare:2;,
 
     ogs_pool_id_t bearer_id;
 } smf_pf_t;
+
+/* ogs_pcc_rule_t.flow_status of a Gx rule without Flow-Status AVP */
+#define SMF_FLOW_STATUS_NOT_PRESENT (-1)
 
 typedef struct smf_bearer_s {
     ogs_lnode_t     lnode;          /**< A node of list_t */
@@ -357,6 +367,8 @@ typedef struct smf_sess_s {
     } sm_data;
 
     bool            epc;            /**< EPC or 5GC */
+    /* Counted in fivegs_smffunction_sm_sessionnbr (KI-78) */
+    bool            sessionnbr_counted;
 
     ogs_pfcp_sess_t pfcp;           /* PFCP session context */
 

@@ -20,6 +20,9 @@
 #include "app/ogs-app.h"
 #include "ogs-pfcp.h"
 
+/* Attempts, 1 s apart, to resolve a configured PFCP peer (KI-29) */
+#define OGS_PFCP_RESOLVE_ATTEMPTS 60
+
 int __ogs_pfcp_domain;
 static ogs_pfcp_context_t self;
 static int context_initialized = 0;
@@ -758,9 +761,33 @@ int ogs_pfcp_context_parse_config(const char *local, const char *remote)
 
                                         addr = NULL;
                                         for (i = 0; i < num; i++) {
-                                            rv = ogs_addaddrinfo(&addr, family,
-                                                    hostname[i], port, 0);
-                                            ogs_assert(rv == OGS_OK);
+                                            /*
+                                             * KI-29: a peer's DNS name can be
+                                             * missing for a while (headless
+                                             * Service of a pod that is still
+                                             * starting). Retry instead of
+                                             * asserting; give up with an error.
+                                             */
+                                            int attempt;
+                                            for (attempt = 1; ; attempt++) {
+                                                rv = ogs_addaddrinfo(&addr,
+                                                        family, hostname[i],
+                                                        port, 0);
+                                                if (rv == OGS_OK ||
+                                                    attempt >=
+                                                    OGS_PFCP_RESOLVE_ATTEMPTS)
+                                                    break;
+                                                ogs_warn("PFCP peer [%s] not "
+                                                    "resolvable, retry %d/%d",
+                                                    hostname[i], attempt,
+                                                    OGS_PFCP_RESOLVE_ATTEMPTS);
+                                                ogs_msleep(1000);
+                                            }
+                                            if (rv != OGS_OK) {
+                                                ogs_error("PFCP peer [%s] not "
+                                                    "resolvable", hostname[i]);
+                                                return OGS_ERROR;
+                                            }
                                         }
 
                                         ogs_filter_ip_version(&addr,

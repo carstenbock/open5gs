@@ -36,8 +36,8 @@ void smf_gn_handle_echo_request(
     ogs_assert(req);
 
     ogs_debug("[PGW] Receiving Echo Request");
-    /* FIXME : Implementing recovery counter correctly */
-    ogs_gtp1_send_echo_response(xact, 0);
+    /* Own restart counter (KI-123) */
+    ogs_gtp1_send_echo_response(xact, smf_self()->gtpc_restart_counter);
 }
 
 void smf_gn_handle_echo_response(

@@ -525,7 +525,23 @@ static void reselect_upf(ogs_pfcp_node_t *node)
         ogs_list_for_each_safe(&smf_ue->sess_list, next_sess, sess) {
 
             if (node == sess->pfcp_node) {
-                if (sess->epc) {
+                if (sess->epc && sess->gtp.version == 2) {
+                    /*
+                     * KI-119(a): the UPF holding this PDN connection is
+                     * gone, so is its user plane. Release the PDN connection
+                     * like the shutdown drain does: Delete Bearer Request
+                     * for the default bearer with "reactivation requested",
+                     * so that the UE sets it up again (on a live UPF). The
+                     * PFCP Session Deletion that follows goes to the UPF
+                     * that is still associated; its "Session context not
+                     * found" answer ends the release like a success.
+                     */
+                    ogs_warn("[%s:%s] UPF lost: releasing the PDN connection",
+                            smf_ue->imsi_bcd, sess->session.name);
+                    sess->pfcp_node = iter;
+                    smf_trigger_session_release(
+                            sess, NULL, OGS_PFCP_DELETE_TRIGGER_SMF_INITIATED);
+                } else if (sess->epc) {
                     ogs_error("[%s:%s] EPC restoration is not implemented",
                             smf_ue->imsi_bcd, sess->session.name);
                 } else {

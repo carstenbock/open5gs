@@ -94,6 +94,9 @@ sgwc:
         - address: 127.0.0.6
 
 smf:
+  # Tests stop the SMF right after the last test case; a shutdown drain
+  # would outlast the 3 s that the test harness waits for its children.
+  shutdown_drain_timeout: 0
 #  sbi:
 #    server:
 #      - address: 127.0.0.4

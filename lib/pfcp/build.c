@@ -863,6 +863,9 @@ void ogs_pfcp_build_update_qer(
     message->qer_id.presence = 1;
     message->qer_id.u32 = qer->id;
 
+    message->gate_status.presence = 1;
+    message->gate_status.u8 = qer->gate_status.value;
+
     if (modify_flags &
             (OGS_PFCP_MODIFY_QOS_MODIFY|
              OGS_PFCP_MODIFY_EPC_QOS_UPDATE)) {

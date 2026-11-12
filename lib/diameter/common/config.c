@@ -63,8 +63,16 @@ static int diam_config_apply(ogs_diam_config_t *fd_config)
         return OGS_ERROR;
     }
 
+    /*
+     * The address is configured explicitly (listen_on): accept it as given.
+     * Without EP_ACCEPTALL the freeDiameter fork drops loopback, link-local
+     * and site-local addresses, and the server then binds the wildcard
+     * address, so a second instance on the same host fails with EADDRINUSE
+     * (e.g. HSS on 127.0.0.8 and PCRF on 127.0.0.9 in the test suites).
+     */
     CHECK_FCT_DO( fd_ep_add_merge( &fd_g_config->cnf_endpoints,
-            ai->ai_addr, ai->ai_addrlen, EP_FL_CONF), return OGS_ERROR );
+            ai->ai_addr, ai->ai_addrlen, EP_FL_CONF | EP_ACCEPTALL),
+            return OGS_ERROR );
     freeaddrinfo(ai);
 
     if (fd_config->cnf_port)

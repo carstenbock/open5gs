@@ -374,6 +374,18 @@ void smf_state_operational(ogs_fsm_t *s, smf_event_t *e)
             case OGS_DIAM_GX_CC_REQUEST_TYPE_TERMINATION_REQUEST:
                 ogs_fsm_dispatch(&sess->sm, e);
                 break;
+            case OGS_DIAM_GX_CC_REQUEST_TYPE_UPDATE_REQUEST:
+                /* Answer to a Charging-Rule-Report (KI-115) */
+                if (gx_message->result_code != ER_DIAMETER_SUCCESS)
+                    ogs_warn("Gx CCA-U Result-Code[%d]",
+                            gx_message->result_code);
+                else
+                    ogs_info("Gx CCA-U Result-Code[%d]",
+                            gx_message->result_code);
+                if (gx_message->session_data.num_of_pcc_rule)
+                    ogs_warn("Gx CCA-U: %d PCC rule(s) ignored",
+                            gx_message->session_data.num_of_pcc_rule);
+                break;
             default:
                 ogs_error("Not implemented(%d)", gx_message->cc_request_type);
                 break;

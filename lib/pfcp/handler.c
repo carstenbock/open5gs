@@ -197,6 +197,20 @@ bool ogs_pfcp_up_handle_pdr(
 
     memset(report, 0, sizeof(*report));
 
+    /*
+     * Gate Status of the QER, TS 29.244 §5.4.3 / §8.2.7: a closed gate
+     * drops the packets of its direction (KI-70, Flow-Status from Gx).
+     */
+    if (pdr->qer &&
+        ((pdr->src_if == OGS_PFCP_INTERFACE_ACCESS &&
+          pdr->qer->gate_status.uplink == OGS_PFCP_GATE_CLOSE) ||
+         (pdr->src_if == OGS_PFCP_INTERFACE_CORE &&
+          pdr->qer->gate_status.downlink == OGS_PFCP_GATE_CLOSE))) {
+        ogs_trace("Gate closed: PDR[%d] dropped", pdr->id);
+        ogs_pkbuf_free(sendbuf);
+        return true;
+    }
+
     if ((pdr->src_if == OGS_PFCP_INTERFACE_CORE &&
          pdr->src_if_type_presence == true &&
          pdr->src_if_type ==
@@ -1442,6 +1456,8 @@ ogs_pfcp_qer_t *ogs_pfcp_handle_update_qer(ogs_pfcp_sess_t *sess,
             return NULL;
         }
     }
+    if (message->gate_status.presence)
+        qer->gate_status.value = message->gate_status.u8;
 
     return qer;
 }

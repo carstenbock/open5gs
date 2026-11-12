@@ -1109,6 +1109,16 @@ void smf_gsm_state_operational(ogs_fsm_t *s, smf_event_t *e)
 
     switch (e->h.id) {
     case OGS_FSM_ENTRY_SIG:
+        /*
+         * KI-78: count EPC sessions in the session gauge too, once they are
+         * established; SMF_SESS_CLEAR decrements only counted sessions.
+         */
+        if (sess->epc && !sess->sessionnbr_counted) {
+            smf_metrics_inst_by_slice_add(
+                    &sess->serving_plmn_id, &sess->s_nssai,
+                    SMF_METR_GAUGE_SM_SESSIONNBR, 1);
+            sess->sessionnbr_counted = true;
+        }
         break;
 
     case OGS_FSM_EXIT_SIG:

@@ -87,6 +87,7 @@
  * uses some AVPs from the former, but not this one.
 */
 #include <freeDiameter/extension.h>
+#include "ogs-diameter-rx.h"
 
 
 /* The content of this file follows the same structure as dict_base_proto.c */
@@ -186,6 +187,8 @@ int ogs_dict_rx_entry(char *conffile)
 
     CHECK_dict_search( DICT_COMMAND, CMD_BY_NAME, "AA-Request", &cmd);
     PARSE_loc_rules( rules, cmd );
+    /* Rx has no Auth-Request-Type (TS 29.214 §5.6), NASREQ requires it */
+    CHECK_FCT( ogs_diam_rule_set_optional(cmd, "Auth-Request-Type") );
   }
 
   /* AA-Answer (AAA) Command */
@@ -205,6 +208,8 @@ int ogs_dict_rx_entry(char *conffile)
 
     CHECK_dict_search( DICT_COMMAND, CMD_BY_NAME, "AA-Answer", &cmd);
     PARSE_loc_rules( rules, cmd );
+    /* Rx has no Auth-Request-Type (TS 29.214 §5.6), NASREQ requires it */
+    CHECK_FCT( ogs_diam_rule_set_optional(cmd, "Auth-Request-Type") );
   }
 
   /* Re-Auth-Request (RAR) Command - Extension for Rx */

@@ -56,3 +56,41 @@ bool ogs_diam_is_relay_or_app_advertised(uint32_t app_id)
 
     return false;
 }
+
+/*
+ * Make a REQUIRED base rule of a shared command optional (KI-77).
+ *
+ * The freeDiameter fork's base dictionaries follow the RFCs strictly (e.g.
+ * RFC 4006: Service-Context-Id in every CCR, RFC 7155: Auth-Request-Type in
+ * every AAR/AAA). Gx and Rx reuse those commands without these AVPs
+ * (TS 29.212 §5.6.2, TS 29.214 §5.6.1), so a node that receives them would
+ * answer DIAMETER_MISSING_AVP.
+ */
+int ogs_diam_rule_set_optional(struct dict_object *cmd, const char *avp_name)
+{
+    struct dict_object *avp = NULL, *rule = NULL;
+    struct dict_rule_request req;
+    struct dict_rule_data data;
+
+    CHECK_FCT( fd_dict_search(fd_g_config->cnf_dict, DICT_AVP, AVP_BY_NAME,
+            avp_name, &avp, ENOENT) );
+
+    req.rule_parent = cmd;
+    req.rule_avp = avp;
+    CHECK_FCT( fd_dict_search(fd_g_config->cnf_dict, DICT_RULE,
+            RULE_BY_AVP_AND_PARENT, &req, &rule, 0) );
+    if (!rule)
+        return 0;
+
+    CHECK_FCT( fd_dict_getval(rule, &data) );
+    if (data.rule_position != RULE_REQUIRED)
+        return 0;
+
+    CHECK_FCT( fd_dict_delete(rule) );
+    data.rule_position = RULE_OPTIONAL;
+    data.rule_order = 0;
+    data.rule_min = -1;
+    CHECK_FCT( fd_dict_new(fd_g_config->cnf_dict, DICT_RULE, &data, cmd, NULL) );
+
+    return 0;
+}

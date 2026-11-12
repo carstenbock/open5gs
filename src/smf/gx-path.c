@@ -48,6 +48,17 @@ static int decode_pcc_rule_definition(
         ogs_pcc_rule_t *pcc_rule, struct avp *avpch1, int *perror);
 static void smf_gx_cca_cb(void *data, struct msg **msg);
 
+/*
+ * Charging-Rule-Report for the next CCR-U (KI-115). Set only for the
+ * duration of one smf_gx_send_ccr() call by smf_gx_send_ccr_rule_report();
+ * the SMF runs this on its single event-loop thread.
+ */
+static struct {
+    const char *name;
+    uint32_t status;
+    uint32_t failure_code;
+} rule_report;
+
 static __inline__ struct sess_state *new_state(os0_t sid)
 {
     struct sess_state *new = NULL;
@@ -748,6 +759,41 @@ bool smf_gx_send_ccr(smf_sess_t *sess, ogs_pool_id_t xact_id,
         }
     }
 
+    /* Charging-Rule-Report, TS 29.212 §4.5.12 (KI-115) */
+    if (cc_request_type == OGS_DIAM_GX_CC_REQUEST_TYPE_UPDATE_REQUEST &&
+        rule_report.name) {
+        ret = fd_msg_avp_new(ogs_diam_gx_charging_rule_report, 0, &avp);
+        ogs_assert(ret == 0);
+
+        ret = fd_msg_avp_new(ogs_diam_gx_charging_rule_name, 0, &avpch1);
+        ogs_assert(ret == 0);
+        val.os.data = (uint8_t *)rule_report.name;
+        val.os.len = strlen(rule_report.name);
+        ret = fd_msg_avp_setvalue(avpch1, &val);
+        ogs_assert(ret == 0);
+        ret = fd_msg_avp_add(avp, MSG_BRW_LAST_CHILD, avpch1);
+        ogs_assert(ret == 0);
+
+        ret = fd_msg_avp_new(ogs_diam_gx_pcc_rule_status, 0, &avpch1);
+        ogs_assert(ret == 0);
+        val.u32 = rule_report.status;
+        ret = fd_msg_avp_setvalue(avpch1, &val);
+        ogs_assert(ret == 0);
+        ret = fd_msg_avp_add(avp, MSG_BRW_LAST_CHILD, avpch1);
+        ogs_assert(ret == 0);
+
+        ret = fd_msg_avp_new(ogs_diam_gx_rule_failure_code, 0, &avpch1);
+        ogs_assert(ret == 0);
+        val.u32 = rule_report.failure_code;
+        ret = fd_msg_avp_setvalue(avpch1, &val);
+        ogs_assert(ret == 0);
+        ret = fd_msg_avp_add(avp, MSG_BRW_LAST_CHILD, avpch1);
+        ogs_assert(ret == 0);
+
+        ret = fd_msg_avp_add(req, MSG_BRW_LAST_CHILD, avp);
+        ogs_assert(ret == 0);
+    }
+
     ret = clock_gettime(CLOCK_REALTIME, &sess_data->ts);
 
     /* Keep a pointer to the session data for debug purpose,
@@ -768,6 +814,38 @@ bool smf_gx_send_ccr(smf_sess_t *sess, ogs_pool_id_t xact_id,
     ogs_diam_stats_self()->stats.nb_sent++;
     ogs_assert(pthread_mutex_unlock(&ogs_diam_stats_self()->stats_lock) == 0);
     return true;
+}
+
+/*
+ * TS 29.212 §4.5.12: report a PCC rule that could not be installed or
+ * modified (KI-115) with a CCR-U carrying a Charging-Rule-Report. The PCRF
+ * can then tell the AF (Rx RAR, INDICATION_OF_FAILED_RESOURCES_ALLOCATION).
+ */
+bool smf_gx_send_ccr_rule_report(smf_sess_t *sess,
+        const char *rule_name, uint32_t status, uint32_t failure_code)
+{
+    bool rv;
+
+    ogs_assert(sess);
+
+    if (!rule_name || !sess->gx_sid || !sess->sm_data.gx_active) {
+        ogs_debug("No Gx session for the rule report");
+        return false;
+    }
+
+    ogs_info("Gx Charging-Rule-Report [%s] status[%u] failure-code[%u]",
+            rule_name, status, failure_code);
+
+    rule_report.name = rule_name;
+    rule_report.status = status;
+    rule_report.failure_code = failure_code;
+
+    rv = smf_gx_send_ccr(sess, OGS_INVALID_POOL_ID,
+            OGS_DIAM_GX_CC_REQUEST_TYPE_UPDATE_REQUEST);
+
+    memset(&rule_report, 0, sizeof(rule_report));
+
+    return rv;
 }
 
 /* 3GPP TS 29.212 5b.6.5 Credit-Control-Answer */
@@ -1595,6 +1673,9 @@ static int decode_pcc_rule_definition(
 
     ogs_assert(pcc_rule);
     ogs_assert(avpch1);
+
+    /* No Flow-Status AVP: keep the gate as it is (KI-70) */
+    pcc_rule->flow_status = SMF_FLOW_STATUS_NOT_PRESENT;
 
     ret = fd_msg_browse(avpch1, MSG_BRW_FIRST_CHILD, &avpch2, NULL);
     ogs_assert(ret == 0);

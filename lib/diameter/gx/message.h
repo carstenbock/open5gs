@@ -95,6 +95,9 @@ extern struct dict_object *ogs_diam_gx_charging_rule_remove;
 extern struct dict_object *ogs_diam_gx_charging_rule_definition;
 extern struct dict_object *ogs_diam_gx_charging_rule_base_name;
 extern struct dict_object *ogs_diam_gx_charging_rule_name;
+extern struct dict_object *ogs_diam_gx_charging_rule_report;
+extern struct dict_object *ogs_diam_gx_pcc_rule_status;
+extern struct dict_object *ogs_diam_gx_rule_failure_code;
 extern struct dict_object *ogs_diam_gx_flow_information;
 extern struct dict_object *ogs_diam_gx_flow_direction;
 extern struct dict_object *ogs_diam_gx_flow_description;
@@ -149,6 +152,14 @@ typedef struct ogs_diam_gx_message_s {
 #define OGS_DIAM_GX_CC_REQUEST_TYPE_UPDATE_REQUEST                  2
 #define OGS_DIAM_GX_CC_REQUEST_TYPE_TERMINATION_REQUEST             3
 #define OGS_DIAM_GX_CC_REQUEST_TYPE_EVENT_REQUEST                   4
+
+/* TS 29.212 5.3.19 PCC-Rule-Status */
+#define OGS_DIAM_GX_PCC_RULE_STATUS_ACTIVE                          0
+#define OGS_DIAM_GX_PCC_RULE_STATUS_INACTIVE                        1
+#define OGS_DIAM_GX_PCC_RULE_STATUS_TEMPORARILY_INACTIVE            2
+
+/* TS 29.212 5.3.38 Rule-Failure-Code */
+#define OGS_DIAM_GX_RULE_FAILURE_CODE_RESOURCE_ALLOCATION_FAILURE   10
     uint32_t            cc_request_type;
 
     ogs_session_data_t  session_data;

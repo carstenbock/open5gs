@@ -78,6 +78,7 @@ void smf_context_init(void)
     smf_ctf_config_init(&self.ctf_config);
     self.diam_config = &g_diam_conf;
     self.shutdown_drain_timeout = ogs_time_from_sec(15);
+    self.gtpc_restart_counter = (uint8_t)(time(NULL) & 0xff);
 
     ogs_log_install_domain(&__ogs_ngap_domain, "ngap", ogs_core()->log.level);
     ogs_log_install_domain(&__ogs_nas_domain, "nas", ogs_core()->log.level);
@@ -2109,8 +2110,10 @@ smf_sess_t *smf_sess_add_by_sm_context(ogs_sbi_message_t *message)
     if (sess) {
         ogs_warn("OLD Session Will Release [SUPI:%s,PDU Session identity:%d]",
                 SmContextCreateData->supi, SmContextCreateData->pdu_session_id);
-        smf_metrics_inst_by_slice_add(&sess->serving_plmn_id, &sess->s_nssai,
-                SMF_METR_GAUGE_SM_SESSIONNBR, -1);
+        if (sess->sessionnbr_counted)
+            smf_metrics_inst_by_slice_add(
+                    &sess->serving_plmn_id, &sess->s_nssai,
+                    SMF_METR_GAUGE_SM_SESSIONNBR, -1);
         smf_sess_remove(sess);
     }
 
@@ -2168,8 +2171,10 @@ smf_sess_t *smf_sess_add_by_pdu_session(ogs_sbi_message_t *message)
         ogs_warn("OLD Session Will Release [SUPI:%s,PDU Session identity:%d]",
                 PduSessionCreateData->supi,
                 PduSessionCreateData->pdu_session_id);
-        smf_metrics_inst_by_slice_add(&sess->serving_plmn_id, &sess->s_nssai,
-                SMF_METR_GAUGE_SM_SESSIONNBR, -1);
+        if (sess->sessionnbr_counted)
+            smf_metrics_inst_by_slice_add(
+                    &sess->serving_plmn_id, &sess->s_nssai,
+                    SMF_METR_GAUGE_SM_SESSIONNBR, -1);
         smf_sess_remove(sess);
     }
 

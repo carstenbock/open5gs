@@ -246,6 +246,14 @@ int ogs_dict_gx_entry(char *conffile)
 
     CHECK_dict_search( DICT_COMMAND, CMD_BY_NAME, "Credit-Control-Request", &cmd);
     PARSE_loc_rules( rules, cmd );
+
+    /*
+     * Gx and Gy share the one CCR command of the dictionary. A Gx CCR has no
+     * Service-Context-Id (TS 29.212 §5.6.2), but dict_dcca of the
+     * freeDiameter fork marks it required (RFC 4006), so the PCRF answered
+     * every Gx CCR with DIAMETER_MISSING_AVP (KI-77).
+     */
+    CHECK_FCT( ogs_diam_rule_set_optional(cmd, "Service-Context-Id") );
   }
 
   /* Credit-Control-Answer (CCA) Command - Extension for Gx */

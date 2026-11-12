@@ -40,6 +40,8 @@ void smf_s6b_final(void);
 
 bool smf_gx_send_ccr(smf_sess_t *sess, ogs_pool_id_t xact_id,
         uint32_t cc_request_type);
+bool smf_gx_send_ccr_rule_report(smf_sess_t *sess,
+        const char *rule_name, uint32_t status, uint32_t failure_code);
 bool smf_gy_send_ccr(smf_sess_t *sess, ogs_pool_id_t xact_id,
         uint32_t cc_request_type);
 

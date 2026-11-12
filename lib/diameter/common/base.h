@@ -91,6 +91,7 @@ void ogs_diam_final(void);
 
 int ogs_diam_config_init(ogs_diam_config_t *fd_config);
 bool ogs_diam_is_relay_or_app_advertised(uint32_t app_id);
+int ogs_diam_rule_set_optional(struct dict_object *cmd, const char *avp_name);
 
 int fd_avp_search_avp ( struct avp * groupedavp,
         struct dict_object * what, struct avp ** avp );

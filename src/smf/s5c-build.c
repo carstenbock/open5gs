@@ -72,6 +72,10 @@ ogs_pkbuf_t *smf_s5c_build_create_session_response(
     if (sess->ue_session_type != sess->session.session_type)
         cause.value = OGS_GTP2_CAUSE_NEW_PDN_TYPE_DUE_TO_NETWORK_PREFERENCE;
 
+    /* Recovery, TS 29.274 Table 7.2.2-1 / TS 23.007 (KI-123) */
+    rsp->recovery.presence = 1;
+    rsp->recovery.u8 = smf_self()->gtpc_restart_counter;
+
     /* Control Plane(UL) : SMF-S5C */
     memset(&smf_s5c_teid, 0, sizeof(ogs_gtp2_f_teid_t));
     switch (sess->gtp_rat_type) {

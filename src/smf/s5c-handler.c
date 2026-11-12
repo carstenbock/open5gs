@@ -24,6 +24,7 @@
 #include "s5c-build.h"
 #include "s5c-handler.h"
 #include "pfcp-path.h"
+#include "binding.h"
 
 #include "ipfw/ipfw2.h"
 
@@ -77,9 +78,8 @@ void smf_s5c_handle_echo_request(
     ogs_assert(req);
 
     ogs_debug("[PGW] Receiving Echo Request");
-    /* FIXME : Before implementing recovery counter correctly,
-     *         I'll re-use the recovery value in request message */
-    ogs_gtp2_send_echo_response(xact, req->recovery.u8, 0);
+    /* Own restart counter, not the peer's (KI-123) */
+    ogs_gtp2_send_echo_response(xact, smf_self()->gtpc_restart_counter, 0);
 }
 
 void smf_s5c_handle_echo_response(
@@ -868,6 +868,8 @@ void smf_s5c_handle_create_bearer_response(
     cause_value = OGS_GTP2_CAUSE_REQUEST_ACCEPTED;
 
     if (cause_value != OGS_GTP2_CAUSE_REQUEST_ACCEPTED) {
+        smf_bearer_report_rule_failure(
+                bearer, OGS_DIAM_GX_PCC_RULE_STATUS_INACTIVE);
         ogs_assert(OGS_OK ==
             smf_epc_pfcp_send_one_bearer_modification_request(
                 bearer, OGS_INVALID_POOL_ID, OGS_PFCP_MODIFY_REMOVE,
@@ -925,6 +927,8 @@ void smf_s5c_handle_create_bearer_response(
     }
 
     if (cause_value != OGS_GTP2_CAUSE_REQUEST_ACCEPTED) {
+        smf_bearer_report_rule_failure(
+                bearer, OGS_DIAM_GX_PCC_RULE_STATUS_INACTIVE);
         ogs_assert(OGS_OK ==
             smf_epc_pfcp_send_one_bearer_modification_request(
                 bearer, OGS_INVALID_POOL_ID, OGS_PFCP_MODIFY_REMOVE,
@@ -943,6 +947,8 @@ void smf_s5c_handle_create_bearer_response(
     cause_value = cause->value;
     if (cause_value != OGS_GTP2_CAUSE_REQUEST_ACCEPTED) {
         ogs_error("GTP Bearer Cause [VALUE:%d]", cause_value);
+        smf_bearer_report_rule_failure(
+                bearer, OGS_DIAM_GX_PCC_RULE_STATUS_INACTIVE);
         ogs_assert(OGS_OK ==
             smf_epc_pfcp_send_one_bearer_modification_request(
                 bearer, OGS_INVALID_POOL_ID, OGS_PFCP_MODIFY_REMOVE,
@@ -956,6 +962,8 @@ void smf_s5c_handle_create_bearer_response(
     cause_value = cause->value;
     if (cause_value != OGS_GTP2_CAUSE_REQUEST_ACCEPTED) {
         ogs_error("GTP Cause [Value:%d]", cause_value);
+        smf_bearer_report_rule_failure(
+                bearer, OGS_DIAM_GX_PCC_RULE_STATUS_INACTIVE);
         ogs_assert(OGS_OK ==
             smf_epc_pfcp_send_one_bearer_modification_request(
                 bearer, OGS_INVALID_POOL_ID, OGS_PFCP_MODIFY_REMOVE,
@@ -1009,6 +1017,16 @@ void smf_s5c_handle_create_bearer_response(
             OGS_PFCP_MODIFY_DL_ONLY|OGS_PFCP_MODIFY_ACTIVATE,
             OGS_NAS_PROCEDURE_TRANSACTION_IDENTITY_UNASSIGNED,
             OGS_GTP2_CAUSE_UNDEFINED_VALUE));
+}
+
+/* KI-115: the rule modification failed; the rule stays ACTIVE as it was */
+static void report_update_bearer_failure(ogs_pool_id_t bearer_id)
+{
+    smf_bearer_t *bearer = smf_bearer_find_by_id(bearer_id);
+
+    if (bearer)
+        smf_bearer_report_rule_failure(
+                bearer, OGS_DIAM_GX_PCC_RULE_STATUS_ACTIVE);
 }
 
 void smf_s5c_handle_update_bearer_response(
@@ -1065,6 +1083,7 @@ void smf_s5c_handle_update_bearer_response(
     }
 
     if (cause_value != OGS_GTP2_CAUSE_REQUEST_ACCEPTED) {
+        report_update_bearer_failure(bearer_id);
         return;
     }
 
@@ -1078,6 +1097,7 @@ void smf_s5c_handle_update_bearer_response(
     cause_value = cause->value;
     if (cause_value != OGS_GTP2_CAUSE_REQUEST_ACCEPTED) {
         ogs_error("GTP Bearer Cause [VALUE:%d]", cause_value);
+        report_update_bearer_failure(bearer_id);
         return;
     }
 
@@ -1086,6 +1106,7 @@ void smf_s5c_handle_update_bearer_response(
     cause_value = cause->value;
     if (cause_value != OGS_GTP2_CAUSE_REQUEST_ACCEPTED) {
         ogs_error("GTP Cause [Value:%d]", cause_value);
+        report_update_bearer_failure(bearer_id);
         return;
     }
 

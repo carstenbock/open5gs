@@ -297,6 +297,8 @@ static int pcrf_rx_aar_cb(struct msg **msg, struct avp *avp,
 
             media_component = &rx_message.ims_data.
                     media_component[rx_message.ims_data.num_of_media_component];
+            /* Flow-Status absent: keep the rule's own status (KI-71) */
+            media_component->flow_status = -1;
 
             ret = fd_msg_browse(avpch1, MSG_BRW_FIRST_CHILD, &avpch2, NULL);
             if (ret != 0) {

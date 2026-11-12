@@ -22,8 +22,28 @@
 #include "pfcp-path.h"
 #include "gtp-path.h"
 #include "sbi-path.h"
+#include "fd-path.h"
 
 #include "ipfw/ipfw2.h"
+
+/*
+ * A Create or Update Bearer Request for this bearer failed (reject or no
+ * answer): report its PCC rule on Gx (TS 29.212 §4.5.12, KI-115). A rule
+ * whose dedicated bearer could not be created is INACTIVE; a rule whose
+ * modification failed stays ACTIVE with its previous parameters.
+ */
+void smf_bearer_report_rule_failure(smf_bearer_t *bearer, uint32_t status)
+{
+    smf_sess_t *sess = NULL;
+
+    ogs_assert(bearer);
+    sess = smf_sess_find_by_id(bearer->sess_id);
+    if (!sess || !bearer->pcc_rule.name)
+        return;
+
+    smf_gx_send_ccr_rule_report(sess, bearer->pcc_rule.name, status,
+            OGS_DIAM_GX_RULE_FAILURE_CODE_RESOURCE_ALLOCATION_FAILURE);
+}
 
 static void gtp_bearer_timeout(ogs_gtp_xact_t *xact, void *data)
 {
@@ -54,6 +74,8 @@ static void gtp_bearer_timeout(ogs_gtp_xact_t *xact, void *data)
     switch (type) {
     case OGS_GTP2_CREATE_BEARER_REQUEST_TYPE:
         ogs_error("[%s] No Create Bearer Response", smf_ue->imsi_bcd);
+        smf_bearer_report_rule_failure(
+                bearer, OGS_DIAM_GX_PCC_RULE_STATUS_INACTIVE);
         ogs_assert(OGS_OK ==
             smf_epc_pfcp_send_one_bearer_modification_request(
                 bearer, OGS_INVALID_POOL_ID, OGS_PFCP_MODIFY_REMOVE,
@@ -62,6 +84,8 @@ static void gtp_bearer_timeout(ogs_gtp_xact_t *xact, void *data)
         break;
     case OGS_GTP2_UPDATE_BEARER_REQUEST_TYPE:
         ogs_error("[%s] No Update Bearer Response", smf_ue->imsi_bcd);
+        smf_bearer_report_rule_failure(
+                bearer, OGS_DIAM_GX_PCC_RULE_STATUS_ACTIVE);
         break;
     default:
         ogs_error("GTP Timeout : IMSI[%s] Message-Type[%d]",
@@ -120,6 +144,85 @@ static void encode_traffic_flow_template(
     tft->num_of_packet_filter = i;
 }
 
+/*
+ * Bearer binding, TS 23.203 §6.1.1.4: a PCC rule goes to a bearer with the
+ * same QCI and ARP. A rule with the QoS of the default bearer is bound to the
+ * default bearer, which has no TFT and already carries the rule's traffic, so
+ * no dedicated bearer (Create Bearer Request) is needed (KI-120).
+ *
+ * SPEC-DEVIATION: TS 23.203 §6.1.1.4 -- a rule whose QCI/ARP equal those of
+ * an existing *dedicated* bearer still gets a dedicated bearer of its own.
+ * A shared dedicated bearer would need per-rule packet filter removal and
+ * GBR summation, which the one-rule-per-bearer model here does not have.
+ */
+static bool pcc_rule_binds_to_default_bearer(
+        smf_sess_t *sess, ogs_pcc_rule_t *pcc_rule)
+{
+    ogs_assert(sess);
+    ogs_assert(pcc_rule);
+
+    if (!smf_default_bearer_in_sess(sess))
+        return false;
+
+    return pcc_rule->qos.index != 0 &&
+        pcc_rule->qos.index == sess->session.qos.index &&
+        pcc_rule->qos.arp.priority_level ==
+            sess->session.qos.arp.priority_level &&
+        pcc_rule->qos.arp.pre_emption_capability ==
+            sess->session.qos.arp.pre_emption_capability &&
+        pcc_rule->qos.arp.pre_emption_vulnerability ==
+            sess->session.qos.arp.pre_emption_vulnerability;
+}
+
+/*
+ * Flow-Status of the PCC rule (TS 29.212 §5.3.11) to the gate of the
+ * bearer's QER (TS 29.244 §8.2.7), KI-70. One rule per dedicated bearer,
+ * so the bearer's QER is the rule's QER. Returns true if the gate changed.
+ */
+static bool bearer_gate_from_flow_status(smf_bearer_t *bearer, int flow_status)
+{
+    ogs_pfcp_gate_status_t gate;
+
+    ogs_assert(bearer);
+
+    if (!bearer->qer || flow_status == SMF_FLOW_STATUS_NOT_PRESENT)
+        return false;
+
+    gate.value = 0;
+    switch (flow_status) {
+    case OGS_DIAM_RX_FLOW_STATUS_ENABLED_UPLINK:
+        gate.uplink = OGS_PFCP_GATE_OPEN;
+        gate.downlink = OGS_PFCP_GATE_CLOSE;
+        break;
+    case OGS_DIAM_RX_FLOW_STATUS_ENABLED_DOWNLINK:
+        gate.uplink = OGS_PFCP_GATE_CLOSE;
+        gate.downlink = OGS_PFCP_GATE_OPEN;
+        break;
+    case OGS_DIAM_RX_FLOW_STATUS_DISABLED:
+        gate.uplink = OGS_PFCP_GATE_CLOSE;
+        gate.downlink = OGS_PFCP_GATE_CLOSE;
+        break;
+    case OGS_DIAM_RX_FLOW_STATUS_ENABLED:
+        gate.uplink = OGS_PFCP_GATE_OPEN;
+        gate.downlink = OGS_PFCP_GATE_OPEN;
+        break;
+    default:
+        ogs_error("Invalid Flow-Status [%d] in PCC rule [%s]",
+                flow_status, bearer->pcc_rule.name);
+        return false;
+    }
+
+    if (bearer->qer->gate_status.value == gate.value)
+        return false;
+
+    ogs_info("PCC rule [%s] Flow-Status [%d]: gate UL[%s] DL[%s]",
+            bearer->pcc_rule.name, flow_status,
+            gate.uplink == OGS_PFCP_GATE_OPEN ? "open" : "closed",
+            gate.downlink == OGS_PFCP_GATE_OPEN ? "open" : "closed");
+    bearer->qer->gate_status.value = gate.value;
+    return true;
+}
+
 void smf_bearer_binding(smf_sess_t *sess)
 {
     int rv;
@@ -144,6 +247,14 @@ void smf_bearer_binding(smf_sess_t *sess)
             bearer = smf_bearer_find_by_pcc_rule_name(sess, pcc_rule->name);
             if (!bearer) {
                 ogs_pfcp_pdr_t *dl_pdr = NULL, *ul_pdr = NULL;
+
+                if (pcc_rule_binds_to_default_bearer(sess, pcc_rule)) {
+                    ogs_info("PCC rule [%s] bound to the default bearer "
+                            "[QCI:%d, ARP:%d]", pcc_rule->name,
+                            pcc_rule->qos.index,
+                            pcc_rule->qos.arp.priority_level);
+                    continue;
+                }
 
                 if (pcc_rule->num_of_flow == 0) {
                     /* TFT is mandatory in
@@ -325,6 +436,17 @@ void smf_bearer_binding(smf_sess_t *sess)
             if (bearer_created == false &&
                 qos_presence == false &&
                 ogs_list_count(&bearer->pf_to_add_list) == 0) {
+                if (bearer_gate_from_flow_status(
+                            bearer, pcc_rule->flow_status)) {
+                    /* Gate change only: PFCP, no GTP signalling (KI-70) */
+                    ogs_assert(OGS_OK ==
+                        smf_epc_pfcp_send_one_bearer_modification_request(
+                            bearer, OGS_INVALID_POOL_ID,
+                            OGS_PFCP_MODIFY_QOS_MODIFY,
+                            OGS_NAS_PROCEDURE_TRANSACTION_IDENTITY_UNASSIGNED,
+                            OGS_GTP2_CAUSE_UNDEFINED_VALUE));
+                    continue;
+                }
                 ogs_warn("No need to send 'Update Bearer Request'");
                 ogs_warn("bearer_created:%d, qos_presence:%d, rule_count:%d",
                     bearer_created, qos_presence,
@@ -336,6 +458,7 @@ void smf_bearer_binding(smf_sess_t *sess)
 
                 smf_bearer_tft_update(bearer);
                 smf_bearer_qos_update(bearer);
+                bearer_gate_from_flow_status(bearer, pcc_rule->flow_status);
 
                 ogs_assert(OGS_OK ==
                     smf_epc_pfcp_send_one_bearer_modification_request(
@@ -353,6 +476,9 @@ void smf_bearer_binding(smf_sess_t *sess)
                     pfcp_flags |= OGS_PFCP_MODIFY_EPC_QOS_UPDATE;
                     smf_bearer_qos_update(bearer);
                 }
+                if (bearer_gate_from_flow_status(
+                            bearer, pcc_rule->flow_status))
+                    pfcp_flags |= OGS_PFCP_MODIFY_QOS_MODIFY;
                 ogs_assert(OGS_OK ==
                     smf_epc_pfcp_send_one_bearer_modification_request(
                         bearer, OGS_INVALID_POOL_ID, pfcp_flags,

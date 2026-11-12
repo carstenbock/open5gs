@@ -80,6 +80,7 @@ extern struct dict_object *ogs_diam_rx_rs_bandwidth;
 #define OGS_DIAM_RX_FLOW_STATUS_ENABLED_DOWNLINK    1
 #define OGS_DIAM_RX_FLOW_STATUS_ENABLED             2
 #define OGS_DIAM_RX_FLOW_STATUS_DISABLED            3
+#define OGS_DIAM_RX_FLOW_STATUS_REMOVED             4
 extern struct dict_object *ogs_diam_rx_flow_status;
 extern struct dict_object *ogs_diam_rx_codec_data;
 extern struct dict_object *ogs_diam_rx_media_sub_component;

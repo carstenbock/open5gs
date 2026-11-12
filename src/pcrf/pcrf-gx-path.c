@@ -1051,6 +1051,7 @@ int pcrf_gx_send_rar(
 
     struct msg *req = NULL;
     struct avp *avp, *avpch1;
+    struct avp *remove_avp = NULL;
     union avp_value val;
     struct sess_state *sess_data = NULL, *svg;
     struct rx_sess_state *rx_sess_data = NULL;
@@ -1139,11 +1140,22 @@ int pcrf_gx_send_rar(
             ogs_pcc_rule_t *pcc_rule = NULL;
             ogs_pcc_rule_t *db_pcc_rule = NULL;
             uint8_t qos_index = 0;
+            char *rule_name = NULL;
             ogs_media_component_t *media_component =
                 &rx_message->ims_data.media_component[i];
 
             switch(media_component->media_type) {
             case OGS_DIAM_RX_MEDIA_TYPE_AUDIO:
+                qos_index = OGS_QOS_INDEX_1;
+                break;
+            case OGS_DIAM_RX_MEDIA_TYPE_TEXT:
+                /*
+                 * Real-time text (T.140, TS 26.114): conversational like
+                 * voice, so it uses the QCI 1 rule of the database, but in
+                 * a PCC rule (and bearer) of its own so that it does not
+                 * replace the audio flows (KI-71). The QCI choice is not
+                 * from a normative clause; TS 26.114 leaves it open.
+                 */
                 qos_index = OGS_QOS_INDEX_1;
                 break;
             case OGS_DIAM_RX_MEDIA_TYPE_VIDEO:
@@ -1199,11 +1211,57 @@ int pcrf_gx_send_rar(
                 goto out;
             }
 
+            /* One rule per database rule and media kind (text apart) */
+            rule_name = ogs_msprintf("%s-%s%d", db_pcc_rule->name,
+                media_component->media_type == OGS_DIAM_RX_MEDIA_TYPE_TEXT ?
+                    "t" : "r",
+                (int)ogs_pool_index(&rx_sess_state_pool, rx_sess_data));
+            ogs_assert(rule_name);
+
             for (j = 0; j < rx_sess_data->num_of_pcc_rule; j++) {
-                if (rx_sess_data->pcc_rule[j].qos.index == qos_index) {
+                if (rx_sess_data->pcc_rule[j].name &&
+                    strcmp(rx_sess_data->pcc_rule[j].name, rule_name) == 0) {
                     pcc_rule = &rx_sess_data->pcc_rule[j];
                     break;
                 }
+            }
+
+            /*
+             * Flow-Status REMOVED (TS 29.214 §5.3.13, TS 29.213 §6.2): the
+             * media component is gone, remove its PCC rule (KI-71).
+             */
+            if (media_component->flow_status ==
+                    OGS_DIAM_RX_FLOW_STATUS_REMOVED) {
+                if (pcc_rule) {
+                    if (!remove_avp) {
+                        ret = fd_msg_avp_new(
+                            ogs_diam_gx_charging_rule_remove, 0, &remove_avp);
+                        ogs_assert(ret == 0);
+                    }
+                    ret = fd_msg_avp_new(
+                            ogs_diam_gx_charging_rule_name, 0, &avpch1);
+                    ogs_assert(ret == 0);
+                    val.os.data = (uint8_t *)pcc_rule->name;
+                    val.os.len = strlen(pcc_rule->name);
+                    ret = fd_msg_avp_setvalue(avpch1, &val);
+                    ogs_assert(ret == 0);
+                    ret = fd_msg_avp_add(remove_avp, MSG_BRW_LAST_CHILD, avpch1);
+                    ogs_assert(ret == 0);
+
+                    OGS_PCC_RULE_FREE(pcc_rule);
+                    rx_sess_data->num_of_pcc_rule--;
+                    if (pcc_rule != &rx_sess_data->pcc_rule[
+                            rx_sess_data->num_of_pcc_rule]) {
+                        memcpy(pcc_rule, &rx_sess_data->pcc_rule[
+                                rx_sess_data->num_of_pcc_rule],
+                                sizeof(*pcc_rule));
+                    }
+                    memset(&rx_sess_data->pcc_rule[
+                            rx_sess_data->num_of_pcc_rule], 0,
+                            sizeof(*pcc_rule));
+                }
+                ogs_free(rule_name);
+                continue;
             }
 
             if (!pcc_rule) {
@@ -1211,9 +1269,8 @@ int pcrf_gx_send_rar(
                     &rx_sess_data->pcc_rule[rx_sess_data->num_of_pcc_rule];
 
                 /* Device PCC Rule Info from DB Profile */
-                pcc_rule->name = ogs_msprintf("%s-r%d", db_pcc_rule->name,
-                    (int)ogs_pool_index(&rx_sess_state_pool, rx_sess_data));
-                ogs_assert(pcc_rule->name);
+                pcc_rule->name = rule_name;
+                rule_name = NULL;
 
                 memcpy(&pcc_rule->qos, &db_pcc_rule->qos, sizeof(ogs_qos_t));
 
@@ -1259,6 +1316,16 @@ int pcrf_gx_send_rar(
                 }
             }
 
+            if (rule_name)
+                ogs_free(rule_name);
+
+            /* Flow-Status from the AF (hold, one-way), KI-70/KI-71 */
+            if (media_component->flow_status >=
+                    OGS_DIAM_RX_FLOW_STATUS_ENABLED_UPLINK &&
+                media_component->flow_status <=
+                    OGS_DIAM_RX_FLOW_STATUS_DISABLED)
+                pcc_rule->flow_status = media_component->flow_status;
+
             /* Update QoS */
             rv = ogs_pcc_rule_update_qos_from_media(pcc_rule, media_component);
             if (rv != OGS_OK) {
@@ -1292,6 +1359,11 @@ int pcrf_gx_send_rar(
         if (charging_rule == 1) {
             ret = fd_msg_avp_add(req, MSG_BRW_LAST_CHILD, avp);
             ogs_assert(ret == 0);
+        }
+        if (remove_avp) {
+            ret = fd_msg_avp_add(req, MSG_BRW_LAST_CHILD, remove_avp);
+            ogs_assert(ret == 0);
+            charging_rule = 1;
         }
 
     } else if (rx_message->cmd_code ==
