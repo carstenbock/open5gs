@@ -1411,6 +1411,7 @@ void sgwc_s11_handle_release_access_bearers_request(
 {
     sgwc_sess_t *sess = NULL;
     uint8_t cause_value;
+    int num_of_sent = 0;
 
     ogs_gtp2_release_access_bearers_request_t *req = NULL;
 
@@ -1447,14 +1448,30 @@ void sgwc_s11_handle_release_access_bearers_request(
         sgwc_ue->mme_s11_teid, sgwc_ue->sgw_s11_teid);
 
     ogs_list_for_each(&sgwc_ue->sess_list, sess) {
-
-        ogs_assert(ogs_list_count(&sess->bearer_list));
+        /*
+         * KI-158: a session can be left without bearers (seen during a
+         * PGW-C restart that rejected Create Session Requests); upstream
+         * asserted here and the SGW-C lost every session. Such a session
+         * has no S1-U tunnel to release, so skip it.
+         */
+        if (ogs_list_count(&sess->bearer_list) == 0) {
+            ogs_warn("[%s] Release Access Bearers: session without bearers "
+                    "skipped [sess_id=%d]", sgwc_ue->imsi_bcd, sess->id);
+            continue;
+        }
         ogs_info("    sess_id=%d xact=%p", sess->id, s11_xact);
         ogs_assert(OGS_OK ==
             sgwc_pfcp_send_session_modification_request(
                 sess, s11_xact->id, gtpbuf,
                 OGS_PFCP_MODIFY_DL_ONLY|OGS_PFCP_MODIFY_DEACTIVATE));
+        num_of_sent++;
     }
+
+    /* KI-158: nothing to deactivate, answer at once */
+    if (num_of_sent == 0)
+        ogs_gtp_send_error_message(s11_xact, sgwc_ue->mme_s11_teid,
+                OGS_GTP2_RELEASE_ACCESS_BEARERS_RESPONSE_TYPE,
+                OGS_GTP2_CAUSE_REQUEST_ACCEPTED);
 }
 
 void sgwc_s11_handle_downlink_data_notification_ack(
@@ -1702,7 +1719,7 @@ void sgwc_s11_handle_create_indirect_data_forwarding_tunnel_request(
     ogs_list_for_each(&sgwc_ue->sess_list, sess) {
         bool has_indirect = false;
 
-        ogs_assert(ogs_list_count(&sess->bearer_list));
+        /* KI-158: a session without bearers has no indirect tunnel */
         ogs_list_for_each(&sess->bearer_list, bearer) {
             ogs_list_for_each(&bearer->tunnel_list, tunnel) {
                 if ((tunnel->interface_type ==

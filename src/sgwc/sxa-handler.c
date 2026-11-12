@@ -1617,7 +1617,9 @@ void sgwc_sxa_handle_session_report_request(
             if (far->dst_if == OGS_PFCP_INTERFACE_ACCESS) {
                 ogs_warn("[%s] Error Indication from eNB", sgwc_ue->imsi_bcd);
                 ogs_list_for_each(&sgwc_ue->sess_list, sess) {
-                    ogs_assert(ogs_list_count(&sess->bearer_list));
+                    /* KI-158: skip a session left without bearers */
+                    if (ogs_list_count(&sess->bearer_list) == 0)
+                        continue;
                     ogs_info("    sess_id=%d", sess->id);
                     ogs_assert(OGS_OK ==
                         sgwc_pfcp_send_session_modification_request(sess,
