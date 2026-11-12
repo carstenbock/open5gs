@@ -96,6 +96,9 @@ uint8_t mme_s6a_handle_ula(
     ogs_assert(subscription_data->num_of_slice == 1);
     slice_data = &subscription_data->slice[0];
 
+    /* KI-153: new subscription data from the HSS */
+    mme_ue->subscription_withdrawn = false;
+
     memcpy(&mme_ue->ambr, &subscription_data->ambr, sizeof(ogs_bitrate_t));
 
     mme_session_remove_all(mme_ue);
@@ -255,6 +258,21 @@ void mme_s6a_handle_clr(mme_ue_t *mme_ue, ogs_diam_s6a_message_t *s6a_message)
         return;
     }
 
+    /*
+     * KI-153: the HSS can send the same cancellation more than once (seen:
+     * ten CLRs from five HSS pods within 90 ms). Each one used to send
+     * another Detach Request and another round of Delete Session Requests.
+     * While an HSS-initiated detach is running, answer and ignore it.
+     */
+    if (clr_message->cancellation_type ==
+            OGS_DIAM_S6A_CT_SUBSCRIPTION_WITHDRAWAL &&
+        mme_ue->detach_type == MME_DETACH_TYPE_HSS_EXPLICIT &&
+        mme_ue->nas_eps.type == MME_EPS_TYPE_DETACH_REQUEST_TO_UE) {
+        ogs_warn("[%s] HSS detach already in progress: CLR ignored",
+                mme_ue->imsi_bcd);
+        return;
+    }
+
     /* Set EPS Detach */
     memset(&mme_ue->nas_eps.detach, 0, sizeof(ogs_nas_detach_type_t));
 
@@ -282,6 +300,12 @@ void mme_s6a_handle_clr(mme_ue_t *mme_ue, ogs_diam_s6a_message_t *s6a_message)
     switch (clr_message->cancellation_type) {
     case OGS_DIAM_S6A_CT_SUBSCRIPTION_WITHDRAWAL:
         mme_ue->detach_type = MME_DETACH_TYPE_HSS_EXPLICIT;
+        /*
+         * KI-153: the subscription data is withdrawn (TS 29.272 §7.3.24).
+         * If the UE attaches again before this context is removed, it must
+         * be authenticated and an Update Location sent (TS 23.401 §5.3.2.1).
+         */
+        mme_ue->subscription_withdrawn = true;
 
         /*
          * Before sending Detach-Request,

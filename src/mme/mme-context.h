@@ -561,6 +561,10 @@ struct mme_ue_s {
     ((__mME)->security_context_available == 1) && \
      ((__mME)->mac_failed == 0) && \
      ((__mME)->nas_eps.ue.ksi != OGS_NAS_KSI_NO_KEY_IS_AVAILABLE))
+/* KI-153: valid NAS security context and subscription data still valid */
+#define SECURITY_CONTEXT_REUSABLE(__mME) \
+    (SECURITY_CONTEXT_IS_VALID(__mME) && !(__mME)->subscription_withdrawn)
+
 #define CLEAR_SECURITY_CONTEXT(__mME) \
     do { \
         ogs_assert((__mME)); \
@@ -569,6 +573,16 @@ struct mme_ue_s {
     } while(0)
     int             security_context_available;
     int             mac_failed;
+
+    /*
+     * KI-153: the HSS withdrew the subscription (CLR with
+     * SUBSCRIPTION_WITHDRAWAL). The subscription data kept in this context
+     * is no longer valid, so the next attach or TAU must not reuse the NAS
+     * security context without authentication and Update Location
+     * (TS 23.401 §5.3.2.1 step 5a/8, TS 29.272 §5.2.1.2). Cleared when an
+     * Update Location Answer brings new subscription data.
+     */
+    bool            subscription_withdrawn;
 
     /* Authentication synch failure counter */
     uint8_t auth_synch_fail_count;

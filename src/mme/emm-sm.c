@@ -502,7 +502,7 @@ static void common_register_state(ogs_fsm_t *s, mme_event_t *e,
                 break;
             }
 
-            if (h.integrity_protected && SECURITY_CONTEXT_IS_VALID(mme_ue)) {
+            if (h.integrity_protected && SECURITY_CONTEXT_REUSABLE(mme_ue)) {
                 /*
                  * If the OLD ENB_UE is being maintained in MME-UE Context,
                  * it deletes the S1 Context after exchanging
@@ -611,7 +611,7 @@ static void common_register_state(ogs_fsm_t *s, mme_event_t *e,
                 break;
             }
 
-            if (!h.integrity_protected || !SECURITY_CONTEXT_IS_VALID(mme_ue)) {
+            if (!h.integrity_protected || !SECURITY_CONTEXT_REUSABLE(mme_ue)) {
                 mme_s6a_send_air(enb_ue, mme_ue, NULL);
                 OGS_FSM_TRAN(&mme_ue->sm, &emm_state_authentication);
                 break;
@@ -1954,7 +1954,7 @@ void emm_state_exception(ogs_fsm_t *s, mme_event_t *e)
                 break;
             }
 
-            if (h.integrity_protected && SECURITY_CONTEXT_IS_VALID(mme_ue)) {
+            if (h.integrity_protected && SECURITY_CONTEXT_REUSABLE(mme_ue)) {
                 /*
                  * If the OLD ENB_UE is being maintained in MME-UE Context,
                  * it deletes the S1 Context after exchanging
