@@ -68,7 +68,25 @@ ogs_pkbuf_t *esm_build_pdn_connectivity_reject(
 
     pdn_connectivity_reject->esm_cause = esm_cause;
 
-    if (mme_self()->time.t3396.value &&
+    /*
+     * Visited-core patch: ESM #26 with the PGW's Back-Off Time as T3396
+     * (TS 24.301 §6.5.1.4.3). Without a back-off
+     * from the PGW no T3396 is sent.
+     */
+    if (esm_cause == OGS_NAS_ESM_CAUSE_INSUFFICIENT_RESOURCES &&
+        sess->pgw_back_off_time) {
+        int rv;
+        ogs_nas_gprs_timer_t gprs_timer;
+
+        rv = ogs_nas_gprs_timer_3_from_sec(
+                &gprs_timer, sess->pgw_back_off_time);
+        if (rv == OGS_OK) {
+            pdn_connectivity_reject->presencemask |=
+              OGS_NAS_EPS_PDN_CONNECTIVITY_REJECT_BACK_OFF_TIMER_VALUE_PRESENT;
+            pdn_connectivity_reject->back_off_timer_value.length = 1;
+            pdn_connectivity_reject->back_off_timer_value.t = gprs_timer;
+        }
+    } else if (mme_self()->time.t3396.value &&
         esm_pdn_connectivity_reject_t3396_allowed(esm_cause)) {
         int rv;
         ogs_nas_gprs_timer_t gprs_timer;

@@ -385,6 +385,11 @@ static void gtp_restart_counter_test(abts_case *tc, void *data)
                 true, 18, 18));
     ABTS_INT_EQUAL(tc, true, ogs_gtp2_session_predates_restart(
                 false, 0, 18));
+
+    /* PGW Back-Off Time (EPC Timer, TS 29.274 §8.87) for T3396 */
+    ABTS_INT_EQUAL(tc, 10, ogs_gtp2_epc_timer_to_sec(0x05));    /* 5x2 s */
+    ABTS_INT_EQUAL(tc, 180, ogs_gtp2_epc_timer_to_sec(0x23));   /* 3 min */
+    ABTS_INT_EQUAL(tc, 0, ogs_gtp2_epc_timer_to_sec(0xe5));     /* off */
 }
 
 abts_suite *test_gtp_message(abts_suite *suite)

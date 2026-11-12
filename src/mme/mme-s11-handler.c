@@ -47,6 +47,14 @@ static uint8_t esm_cause_from_gtp(uint8_t gtp_cause)
         return OGS_NAS_ESM_CAUSE_SYNTACTICAL_ERROR_IN_PACKET_FILTERS;
     case OGS_GTP2_CAUSE_SEMANTIC_ERRORS_IN_PACKET_FILTER:
         return OGS_NAS_ESM_CAUSE_SEMANTIC_ERRORS_IN_PACKET_FILTERS;
+    /*
+     * Visited-core patch: a PGW without resources (e.g. a PGW-C that is
+     * draining before a restart) or with APN congestion: ESM #26
+     * "insufficient resources" (TS 24.301 §6.5.1.4.3, TS 29.274 Table 8.4-1).
+     */
+    case OGS_GTP2_CAUSE_NO_RESOURCES_AVAILABLE:
+    case OGS_GTP2_CAUSE_APN_CONGESTION:
+        return OGS_NAS_ESM_CAUSE_INSUFFICIENT_RESOURCES;
     default:
         break;
     }
@@ -223,9 +231,17 @@ static void mme_s11_create_session_fail(
                 mme_ue->imsi_bcd, fail_cause);
 
     if (create_action == OGS_GTP_CREATE_IN_ATTACH_REQUEST) {
+        /*
+         * Visited-core patch: a PGW reject that maps to a specific ESM
+         * cause is reported as EMM #19 "ESM failure" with that ESM cause
+         * (TS 24.301 §5.5.1.2.5); anything else stays network failure.
+         */
+        uint8_t esm_cause = esm_cause_from_gtp(fail_cause);
         r = nas_eps_send_attach_reject(enb_ue, mme_ue,
-                OGS_NAS_EMM_CAUSE_NETWORK_FAILURE,
-                OGS_NAS_ESM_CAUSE_NETWORK_FAILURE);
+                esm_cause == OGS_NAS_ESM_CAUSE_NETWORK_FAILURE ?
+                    OGS_NAS_EMM_CAUSE_NETWORK_FAILURE :
+                    OGS_NAS_EMM_CAUSE_ESM_FAILURE,
+                esm_cause);
         ogs_expect(r == OGS_OK);
         ogs_assert(r != OGS_ERROR);
     } else if (create_action == OGS_GTP_CREATE_IN_TRACKING_AREA_UPDATE) {
@@ -336,6 +352,29 @@ void mme_s11_handle_create_session_response(
     } else {
         fail_cause = OGS_GTP2_CAUSE_MANDATORY_IE_INCORRECT;
         fail_reason = "Invalid Cause IE";
+        goto fail;
+    }
+
+    /*
+     * Visited-core patch: a rejected Create Session Response carries only
+     * the cause and a few optional IEs (TS 29.274 §7.2.2). Report the
+     * reject cause instead of running the IE checks below (upstream
+     * reported "Conditional IE missing"). A PGW Back-Off Time is kept for
+     * the T3396 value of the PDN connectivity reject.
+     */
+    if (session_cause != OGS_GTP2_CAUSE_REQUEST_ACCEPTED &&
+        session_cause != OGS_GTP2_CAUSE_REQUEST_ACCEPTED_PARTIALLY &&
+        session_cause !=
+            OGS_GTP2_CAUSE_NEW_PDN_TYPE_DUE_TO_NETWORK_PREFERENCE &&
+        session_cause !=
+            OGS_GTP2_CAUSE_NEW_PDN_TYPE_DUE_TO_SINGLE_ADDRESS_BEARER_ONLY) {
+        sess->pgw_back_off_time = 0;
+        if (rsp->pgw_back_off_time.presence &&
+            rsp->pgw_back_off_time.len >= 1 && rsp->pgw_back_off_time.data)
+            sess->pgw_back_off_time = ogs_gtp2_epc_timer_to_sec(
+                    ((uint8_t *)rsp->pgw_back_off_time.data)[0]);
+        fail_cause = session_cause;
+        fail_reason = "Rejected by the PGW";
         goto fail;
     }
 

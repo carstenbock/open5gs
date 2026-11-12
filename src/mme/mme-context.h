@@ -988,6 +988,10 @@ typedef struct mme_sess_s {
 
     uint8_t         pti;        /* Procedure Trasaction Identity */
 
+    /* Visited-core patch: PGW Back-Off Time of a rejected Create Session
+     * Response in seconds (0: none), used as T3396 for ESM #26 */
+    uint32_t        pgw_back_off_time;
+
     uint32_t        pgw_s5c_teid;
     ogs_ip_t        pgw_s5c_ip;
 

@@ -55,6 +55,10 @@ bool ogs_gtp2_peer_restart_detected(
  * restart counter seen at its setup is unknown or differs from the
  * peer's current one.
  */
+/* TS 29.274 §8.87 EPC Timer (e.g. PGW Back-Off Time) to seconds;
+ * "deactivated" (unit 7) gives 0 */
+uint32_t ogs_gtp2_epc_timer_to_sec(uint8_t epc_timer);
+
 bool ogs_gtp2_session_predates_restart(
         bool session_known, uint8_t session_counter, uint8_t peer_counter);
 

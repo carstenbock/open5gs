@@ -140,6 +140,32 @@ void sgwc_s5c_handle_create_session_response(
         return;
     }
 
+    /*
+     * Visited-core patch: a rejected Create Session Response carries only
+     * the cause and a few optional IEs (TS 29.274 §7.2.2), so the IE checks
+     * below must not run on it. Pass the PGW's cause on to the MME
+     * (upstream sent "Conditional IE missing") and delete the session
+     * locally; nobody else deletes it, which left empty sessions behind
+     * (KI-158).
+     */
+    if (rsp->cause.presence &&
+        session_cause != OGS_GTP2_CAUSE_REQUEST_ACCEPTED &&
+        session_cause != OGS_GTP2_CAUSE_REQUEST_ACCEPTED_PARTIALLY &&
+        session_cause !=
+            OGS_GTP2_CAUSE_NEW_PDN_TYPE_DUE_TO_NETWORK_PREFERENCE &&
+        session_cause !=
+            OGS_GTP2_CAUSE_NEW_PDN_TYPE_DUE_TO_SINGLE_ADDRESS_BEARER_ONLY) {
+        ogs_error("[%s] Create Session rejected by the PGW [Cause:%d]",
+                sgwc_ue->imsi_bcd, session_cause);
+        ogs_gtp_send_error_message(
+                s11_xact, sgwc_ue->mme_s11_teid,
+                OGS_GTP2_CREATE_SESSION_RESPONSE_TYPE, session_cause);
+        ogs_expect(OGS_OK ==
+            sgwc_pfcp_send_session_deletion_request(
+                sess, OGS_INVALID_POOL_ID, NULL));
+        return;
+    }
+
     /*****************************************
      * Check Mandatory/Conditional IE Missing
      *****************************************/

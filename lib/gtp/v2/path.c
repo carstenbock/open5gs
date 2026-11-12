@@ -309,3 +309,17 @@ bool ogs_gtp2_session_predates_restart(
 {
     return session_known == false || session_counter != peer_counter;
 }
+
+uint32_t ogs_gtp2_epc_timer_to_sec(uint8_t epc_timer)
+{
+    uint32_t value = epc_timer & 0x1f;
+
+    switch (epc_timer >> 5) {
+    case 0: return value * 2;           /* 2 seconds */
+    case 1: return value * 60;          /* 1 minute */
+    case 2: return value * 600;         /* 10 minutes */
+    case 3: return value * 3600;        /* 1 hour */
+    case 4: return value * 36000;       /* 10 hours */
+    default: return 0;                  /* deactivated / reserved */
+    }
+}
