@@ -116,6 +116,37 @@ static void drain_finish(void)
     ogs_thread_mutex_unlock(&drain_mutex);
 }
 
+/*
+ * Paced drain (KI-174): release at most `shutdown_drain_rate` sessions per
+ * second, a share per check interval, so that a large number of sessions
+ * neither floods the event queue nor sends tens of thousands of Delete
+ * Bearer Requests to the peers at once. 0 releases all at once.
+ */
+static int drain_trigger_batch(void)
+{
+    smf_ue_t *smf_ue = NULL;
+    smf_sess_t *sess = NULL;
+    int limit, n = 0;
+
+    limit = smf_self()->shutdown_drain_rate > 0 ?
+        (smf_self()->shutdown_drain_rate + 9) / 10 : INT32_MAX;
+
+    ogs_list_for_each(&smf_self()->smf_ue_list, smf_ue) {
+        ogs_list_for_each(&smf_ue->sess_list, sess) {
+            if (n >= limit)
+                return n;
+            if (!drain_candidate(sess) || sess->drain_triggered)
+                continue;
+            sess->drain_triggered = true;
+            smf_trigger_session_release(
+                    sess, NULL, OGS_PFCP_DELETE_TRIGGER_SMF_INITIATED);
+            n++;
+        }
+    }
+
+    return n;
+}
+
 static void drain_check(void *data)
 {
     int count;
@@ -138,6 +169,8 @@ static void drain_check(void *data)
         drain_finish();
         return;
     }
+
+    drain_trigger_batch();
 
     if (!smf_self()->t_shutdown_drain) {
         smf_self()->t_shutdown_drain =
@@ -191,17 +224,15 @@ void smf_drain_start(void)
 
     ogs_list_for_each(&smf_self()->smf_ue_list, smf_ue) {
         ogs_list_for_each(&smf_ue->sess_list, sess) {
-            if (!drain_candidate(sess))
-                continue;
-            smf_trigger_session_release(
-                    sess, NULL, OGS_PFCP_DELETE_TRIGGER_SMF_INITIATED);
-            count++;
+            if (drain_candidate(sess))
+                count++;
         }
     }
 
     ogs_info("Shutdown drain: releasing %d EPC session(s) "
-            "[timeout:%lld ms]", count,
-            (long long)ogs_time_to_msec(smf_self()->shutdown_drain_timeout));
+            "[timeout:%lld ms, rate:%d/s]", count,
+            (long long)ogs_time_to_msec(smf_self()->shutdown_drain_timeout),
+            smf_self()->shutdown_drain_rate);
 
     drain_check(NULL);
 }

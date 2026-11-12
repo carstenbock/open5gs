@@ -228,6 +228,27 @@ cleanup:
     ogs_pkbuf_free(pkbuf);
 }
 
+/*
+ * KI-62: a mass teardown (tens of thousands of Delete Session Requests
+ * within minutes) overflowed the default 208 KiB receive buffer of the
+ * GTP-C socket; the kernel dropped requests and the peers gave up. Ask for
+ * a larger buffer; the kernel caps it at net.core.rmem_max.
+ */
+#define SMF_GTPC_RCVBUF (8 * 1024 * 1024)
+static void gtpc_set_rcvbuf(ogs_sock_t *sock)
+{
+    int size = SMF_GTPC_RCVBUF;
+    socklen_t len = sizeof(size);
+
+    if (setsockopt(sock->fd, SOL_SOCKET, SO_RCVBUF, &size, len) != 0) {
+        ogs_warn("GTP-C SO_RCVBUF %d failed", size);
+        return;
+    }
+    if (getsockopt(sock->fd, SOL_SOCKET, SO_RCVBUF, &size, &len) == 0)
+        ogs_info("GTP-C receive buffer %d bytes (asked %d; capped by "
+                "net.core.rmem_max)", size, SMF_GTPC_RCVBUF);
+}
+
 int smf_gtp_open(void)
 {
     ogs_socknode_t *node = NULL;
@@ -236,6 +257,7 @@ int smf_gtp_open(void)
     ogs_list_for_each(&ogs_gtp_self()->gtpc_list, node) {
         sock = ogs_gtp_server(node);
         if (!sock) return OGS_ERROR;
+        gtpc_set_rcvbuf(sock);
 
         node->poll = ogs_pollset_add(ogs_app()->pollset,
                 OGS_POLLIN, sock->fd, _gtpv1v2_c_recv_cb, sock);
@@ -244,6 +266,7 @@ int smf_gtp_open(void)
     ogs_list_for_each(&ogs_gtp_self()->gtpc_list6, node) {
         sock = ogs_gtp_server(node);
         if (!sock) return OGS_ERROR;
+        gtpc_set_rcvbuf(sock);
 
         node->poll = ogs_pollset_add(ogs_app()->pollset,
                 OGS_POLLIN, sock->fd, _gtpv1v2_c_recv_cb, sock);
