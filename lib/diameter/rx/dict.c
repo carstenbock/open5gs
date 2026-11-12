@@ -259,12 +259,19 @@ int ogs_dict_rx_entry(char *conffile)
     PARSE_loc_rules( rules, cmd );
   }
 
-  /* Abort-Session-Request (ASR) Command - Extension for Rx */
+  /* Abort-Session-Request (ASR) Command - Extension for Rx
+   *
+   * freeDiameter has one ASR command for all applications, so a required
+   * Abort-Cause here made every process that loads this dictionary refuse
+   * an ASR of any other application with 5005: the SMF refused the OCS's
+   * Gy ASR (RFC 6733 8.5, which has no Abort-Cause; KI-63). TS 29.214
+   * 5.6.6 still has it in the Rx ASR, which the PCRF builds with it; this
+   * rule only governs what a receiver accepts. */
   {
     struct dict_object * cmd;
     struct local_rules_definition rules[] =
     {
-      {  { .avp_vendor = 10415, .avp_name = "Abort-Cause" }, RULE_REQUIRED, -1, 1 }
+      {  { .avp_vendor = 10415, .avp_name = "Abort-Cause" }, RULE_OPTIONAL, -1, 1 }
     };
 
     CHECK_dict_search( DICT_COMMAND, CMD_BY_NAME, "Abort-Session-Request", &cmd);

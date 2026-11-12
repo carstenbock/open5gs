@@ -411,6 +411,9 @@ void smf_state_operational(ogs_fsm_t *s, smf_event_t *e)
         case OGS_DIAM_GY_CMD_RE_AUTH:
             smf_gy_handle_re_auth_request(sess, gy_message);
             break;
+        case OGS_DIAM_GY_CMD_ABORT_SESSION:
+            smf_gy_handle_abort_session_request(sess, gy_message);
+            break;
         default:
             ogs_error("Invalid type(%d)", gy_message->cmd_code);
             break;

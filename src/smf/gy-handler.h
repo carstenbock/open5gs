@@ -39,6 +39,8 @@ uint32_t smf_gy_handle_cca_termination_request(
         ogs_gtp_xact_t *gtp_xact);
 void smf_gy_handle_re_auth_request(
         smf_sess_t *sess, ogs_diam_gy_message_t *gy_message);
+void smf_gy_handle_abort_session_request(
+        smf_sess_t *sess, ogs_diam_gy_message_t *gy_message);
 
 #ifdef __cplusplus
 }

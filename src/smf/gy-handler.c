@@ -23,6 +23,7 @@
 #include "pfcp-path.h"
 #include "gy-handler.h"
 #include "binding.h"
+#include "local-path.h"
 
 static void urr_update_volume(smf_sess_t *sess, ogs_pfcp_urr_t *urr, ogs_diam_gy_message_t *gy_message)
 {
@@ -284,4 +285,26 @@ void smf_gy_handle_re_auth_request(
         smf_sess_t *sess, ogs_diam_gy_message_t *gy_message)
 {
     /* TODO: find out what to do here */
+}
+
+/*
+ * The OCS aborted the session (ASR, KI-63): release it network-side. For
+ * EPC that is a Delete Bearer Request for the default bearer without
+ * "reactivation requested" (the subscriber's charging ended, a re-attach
+ * would be refused anyway); the release then ends Gy with a CCR-T.
+ */
+void smf_gy_handle_abort_session_request(
+        smf_sess_t *sess, ogs_diam_gy_message_t *gy_message)
+{
+    smf_ue_t *smf_ue = NULL;
+
+    ogs_assert(sess);
+    smf_ue = smf_ue_find_by_id(sess->smf_ue_id);
+    ogs_warn("[%s:%s] Gy Abort-Session-Request: releasing the session",
+            smf_ue ? smf_ue->imsi_bcd : "?",
+            sess->session.name ? sess->session.name : "?");
+
+    smf_trigger_session_release(sess, NULL,
+            sess->epc ? OGS_PFCP_DELETE_TRIGGER_LOCAL_INITIATED :
+                        OGS_PFCP_DELETE_TRIGGER_SMF_INITIATED);
 }

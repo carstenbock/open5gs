@@ -24,6 +24,7 @@
 static struct session_handler *smf_gy_reg = NULL;
 static struct disp_hdl *hdl_gy_fb = NULL;
 static struct disp_hdl *hdl_gy_rar = NULL;
+static struct disp_hdl *hdl_gy_asr = NULL;
 
 struct sess_state {
     os0_t       gy_sid;             /* Gy Session-Id */
@@ -1596,6 +1597,80 @@ error_out:
     return 0;
 }
 
+/*
+ * Abort-Session-Request from the OCS (RFC 6733 8.5, TS 32.299): the
+ * operator ended the subscriber's charging (account deleted or blocked).
+ * Answered at once: 2001 when the session is known here, 5002 when not.
+ * The SMF then releases the session in its own loop (smf_gy_handle_abort_
+ * session_request), which ends Gy with a CCR-T. Up to 0.0.40 no handler was
+ * registered and the session stayed until a later CCR-Update failed (KI-63).
+ */
+static int smf_gy_asr_cb(struct msg **msg, struct avp *avp,
+        struct session *session, void *opaque, enum disp_action *act)
+{
+    int rv;
+    int ret;
+
+    struct msg *ans;
+    struct sess_state *sess_data = NULL;
+    smf_event_t *e = NULL;
+    smf_sess_t *sess = NULL;
+    ogs_diam_gy_message_t *gy_message = NULL;
+    char *rescode = (char *)"DIAMETER_UNKNOWN_SESSION_ID";
+
+    ogs_assert(msg);
+
+    ogs_debug("Abort-Session-Request");
+
+    ret = fd_msg_new_answer_from_req(fd_g_config->cnf_dict, msg, 0);
+    ogs_assert(ret == 0);
+    ans = *msg;
+
+    ret = fd_sess_state_retrieve(smf_gy_reg, session, &sess_data);
+    ogs_assert(ret == 0);
+
+    if (!sess_data) {
+        ogs_warn("Gy ASR for an unknown session");
+    } else if (!(sess = smf_sess_find_by_id(sess_data->sess_id))) {
+        ogs_warn("Gy ASR: session not found: %d", sess_data->sess_id);
+    } else if (!(gy_message = ogs_calloc(1, sizeof(*gy_message)))) {
+        ogs_error("Failed to allocate gy_message");
+        rescode = (char *)"DIAMETER_UNABLE_TO_COMPLY";
+    } else {
+        gy_message->cmd_code = OGS_DIAM_GY_CMD_ABORT_SESSION;
+        e = smf_event_new(SMF_EVT_GY_MESSAGE);
+        ogs_assert(e);
+        e->sess_id = sess->id;
+        e->gy_message = gy_message;
+        rv = ogs_queue_push(ogs_app()->queue, e);
+        if (rv != OGS_OK) {
+            ogs_error("ogs_queue_push() failed:%d", (int)rv);
+            ogs_free(gy_message);
+            ogs_event_free(e);
+            rescode = (char *)"DIAMETER_UNABLE_TO_COMPLY";
+        } else {
+            ogs_pollset_notify(ogs_app()->pollset);
+            rescode = (char *)"DIAMETER_SUCCESS";
+        }
+    }
+
+    ret = fd_msg_rescode_set(ans, rescode, NULL, NULL, 1);
+    ogs_assert(ret == 0);
+
+    if (sess_data) {
+        ret = fd_sess_state_store(smf_gy_reg, session, &sess_data);
+        ogs_assert(ret == 0);
+        ogs_assert(sess_data == NULL);
+    }
+
+    ret = fd_msg_send(msg, NULL, NULL);
+    if (ret != 0)
+        ogs_error("Failed to send Abort-Session-Answer");
+
+    ogs_debug("Abort-Session-Answer [%s]", rescode);
+    return 0;
+}
+
 int smf_gy_init(void)
 {
     int ret;
@@ -1624,6 +1699,11 @@ int smf_gy_init(void)
                 &hdl_gy_rar);
     ogs_assert(ret == 0);
 
+    data.command = ogs_diam_gy_cmd_asr;
+    ret = fd_disp_register(smf_gy_asr_cb, DISP_HOW_CC, &data, NULL,
+                &hdl_gy_asr);
+    ogs_assert(ret == 0);
+
     /* Advertise the support for the application in the peer */
     ret = fd_disp_app_support(ogs_diam_gy_application, NULL, 1, 0);
     ogs_assert(ret == 0);
@@ -1642,6 +1722,8 @@ void smf_gy_final(void)
         (void) fd_disp_unregister(&hdl_gy_fb, NULL);
     if (hdl_gy_rar)
         (void) fd_disp_unregister(&hdl_gy_rar, NULL);
+    if (hdl_gy_asr)
+        (void) fd_disp_unregister(&hdl_gy_asr, NULL);
 
     ogs_pool_final(&sess_state_pool);
     ogs_thread_mutex_destroy(&sess_state_mutex);

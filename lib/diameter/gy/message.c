@@ -28,6 +28,7 @@ struct dict_object *ogs_diam_gy_application = NULL;
 struct dict_object *ogs_diam_gy_cmd_ccr = NULL;
 struct dict_object *ogs_diam_gy_cmd_cca = NULL;
 struct dict_object *ogs_diam_gy_cmd_rar = NULL;
+struct dict_object *ogs_diam_gy_cmd_asr = NULL;
 struct dict_object *ogs_diam_gy_cmd_raa = NULL;
 
 struct dict_object *ogs_diam_gy_cc_request_type = NULL;
@@ -95,6 +96,7 @@ int ogs_diam_gy_init(void)
     CHECK_dict_search(DICT_COMMAND, CMD_BY_NAME, "Credit-Control-Request", &ogs_diam_gy_cmd_ccr);
     CHECK_dict_search(DICT_COMMAND, CMD_BY_NAME, "Credit-Control-Answer", &ogs_diam_gy_cmd_cca);
     CHECK_dict_search(DICT_COMMAND, CMD_BY_NAME, "Re-Auth-Request", &ogs_diam_gy_cmd_rar);
+    CHECK_dict_search(DICT_COMMAND, CMD_BY_NAME, "Abort-Session-Request", &ogs_diam_gy_cmd_asr);
     CHECK_dict_search(DICT_COMMAND, CMD_BY_NAME, "Re-Auth-Answer", &ogs_diam_gy_cmd_raa);
 
     CHECK_dict_search(DICT_AVP, AVP_BY_NAME_ALL_VENDORS, "CC-Request-Type", &ogs_diam_gy_cc_request_type);

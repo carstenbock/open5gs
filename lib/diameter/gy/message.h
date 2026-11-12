@@ -58,6 +58,7 @@ extern struct dict_object *ogs_diam_gy_application;
 extern struct dict_object *ogs_diam_gy_cmd_ccr;
 extern struct dict_object *ogs_diam_gy_cmd_cca;
 extern struct dict_object *ogs_diam_gy_cmd_rar;
+extern struct dict_object *ogs_diam_gy_cmd_asr;
 extern struct dict_object *ogs_diam_gy_cmd_raa;
 
 extern struct dict_object *ogs_diam_gy_cc_request_type;
@@ -169,6 +170,7 @@ typedef struct gs_diam_gy_final_unit_s {
 typedef struct ogs_diam_gy_message_s {
 #define OGS_DIAM_GY_CMD_CODE_CREDIT_CONTROL                         272
 #define OGS_DIAM_GY_CMD_RE_AUTH                                     258
+#define OGS_DIAM_GY_CMD_ABORT_SESSION                               274
     uint16_t            cmd_code;
 
 /* Experimental-Result-Codes */
