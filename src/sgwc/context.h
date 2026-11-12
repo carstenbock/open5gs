@@ -50,7 +50,19 @@ typedef struct sgwc_context_s {
 
     /* KI-170: own GTP-C restart counter (Recovery IE) */
     uint8_t gtpc_restart_counter;
+
+    /* KI-174: S5/S8 Echo towards the PGWs, PGW restart detection */
+    ogs_time_t pgw_echo_interval;   /* 0: no Echo Requests */
+    ogs_timer_t *t_pgw_echo;
+    ogs_timer_t *t_pgw_release;
 } sgwc_context_t;
+
+/* KI-174: kept in ogs_gtp_node_t.data_ptr of each PGW node */
+typedef struct sgwc_pgw_state_s {
+    uint8_t     restart_counter;
+    bool        restart_counter_known;
+    bool        release_pending;
+} sgwc_pgw_state_t;
 
 typedef struct sgwc_ue_s {
     ogs_lnode_t     lnode;
@@ -109,6 +121,11 @@ typedef struct sgwc_sess_s {
      * Error Indication; further Error Indications are ignored.
      */
     bool            release_to_mme_pending;
+
+    /* KI-174: the PGW's restart counter in this session's Create Session
+     * Response */
+    uint8_t         pgw_restart_counter;
+    bool            pgw_restart_counter_known;
 } sgwc_sess_t;
 
 typedef struct sgwc_bearer_s {

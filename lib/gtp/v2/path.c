@@ -303,3 +303,9 @@ bool ogs_gtp2_peer_restart_detected(
     *stored = received;
     return true;
 }
+
+bool ogs_gtp2_session_predates_restart(
+        bool session_known, uint8_t session_counter, uint8_t peer_counter)
+{
+    return session_known == false || session_counter != peer_counter;
+}

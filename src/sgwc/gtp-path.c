@@ -130,6 +130,9 @@ int sgwc_gtp_open(void)
     }
 
     OGS_SETUP_GTPC_SERVER;
+
+    /* KI-174 */
+    sgwc_pgw_path_init();
     ogs_assert(ogs_gtp_self()->gtpc_sock || ogs_gtp_self()->gtpc_sock6);
     ogs_assert(ogs_gtp_self()->gtpc_addr || ogs_gtp_self()->gtpc_addr6);
 
@@ -138,6 +141,16 @@ int sgwc_gtp_open(void)
 
 void sgwc_gtp_close(void)
 {
+    /* KI-174 */
+    if (sgwc_self()->t_pgw_echo) {
+        ogs_timer_delete(sgwc_self()->t_pgw_echo);
+        sgwc_self()->t_pgw_echo = NULL;
+    }
+    if (sgwc_self()->t_pgw_release) {
+        ogs_timer_delete(sgwc_self()->t_pgw_release);
+        sgwc_self()->t_pgw_release = NULL;
+    }
+
     ogs_socknode_remove_all(&ogs_gtp_self()->gtpc_list);
     ogs_socknode_remove_all(&ogs_gtp_self()->gtpc_list6);
 }
@@ -378,4 +391,142 @@ int sgwc_gtp_send_delete_bearer_request_to_mme(
     ogs_expect(rv == OGS_OK);
 
     return rv;
+}
+
+/*
+ * KI-174: S5/S8 path management towards the PGWs (TS 29.274 §7.1,
+ * TS 23.007 §16.1.1). The SGW sends Echo Requests to every PGW it has
+ * sessions with and learns the PGW's restart counter from Echo Responses
+ * and Create Session Responses. When the counter changes, the PDN
+ * connections set up before the PGW restart are released: a Delete Bearer
+ * Request with cause "Reactivation requested" goes to the MME (KI-119
+ * path: ESM #39, or detach with re-attach required for the last PDN
+ * connection), and the session is deleted when the MME answers.
+ */
+#define SGWC_PGW_RELEASE_BATCH      50
+#define SGWC_PGW_RELEASE_PACING     ogs_time_from_msec(100)
+
+static void pgw_echo_timeout(void *data)
+{
+    ogs_gtp_node_t *pgw = NULL;
+
+    ogs_list_for_each(&sgwc_self()->pgw_s5c_list, pgw)
+        ogs_gtp2_send_echo_request(
+                pgw, sgwc_self()->gtpc_restart_counter, 0);
+
+    if (sgwc_self()->pgw_echo_interval)
+        ogs_timer_start(sgwc_self()->t_pgw_echo,
+                sgwc_self()->pgw_echo_interval);
+}
+
+static void pgw_release_timeout(void *data)
+{
+    sgwc_pgw_release_lost_sessions();
+}
+
+void sgwc_pgw_path_init(void)
+{
+    sgwc_self()->t_pgw_echo = ogs_timer_add(
+            ogs_app()->timer_mgr, pgw_echo_timeout, NULL);
+    ogs_assert(sgwc_self()->t_pgw_echo);
+    sgwc_self()->t_pgw_release = ogs_timer_add(
+            ogs_app()->timer_mgr, pgw_release_timeout, NULL);
+    ogs_assert(sgwc_self()->t_pgw_release);
+
+    if (sgwc_self()->pgw_echo_interval)
+        ogs_timer_start(sgwc_self()->t_pgw_echo,
+                sgwc_self()->pgw_echo_interval);
+}
+
+static bool is_pgw_node(ogs_gtp_node_t *gnode)
+{
+    ogs_gtp_node_t *pgw = NULL;
+
+    ogs_list_for_each(&sgwc_self()->pgw_s5c_list, pgw)
+        if (pgw == gnode)
+            return true;
+    return false;
+}
+
+void sgwc_pgw_recovery_received(
+        ogs_gtp_node_t *gnode, uint8_t recovery, const char *source)
+{
+    char buf[OGS_ADDRSTRLEN];
+    sgwc_pgw_state_t *state = NULL;
+    bool first;
+
+    if (!gnode || !is_pgw_node(gnode))
+        return;
+
+    if (!gnode->data_ptr) {
+        gnode->data_ptr = ogs_calloc(1, sizeof(sgwc_pgw_state_t));
+        ogs_assert(gnode->data_ptr);
+    }
+    state = gnode->data_ptr;
+
+    first = !state->restart_counter_known;
+    if (ogs_gtp2_peer_restart_detected(&state->restart_counter,
+                &state->restart_counter_known, recovery)) {
+        ogs_warn("PGW [%s] restarted (restart counter now %d, %s): "
+                "releasing the PDN connections set up before the restart",
+                OGS_ADDR(&gnode->addr, buf), recovery, source);
+        state->release_pending = true;
+        ogs_timer_start(sgwc_self()->t_pgw_release, ogs_time_from_msec(1));
+    } else if (first) {
+        ogs_info("PGW [%s] restart counter %d (%s)",
+                OGS_ADDR(&gnode->addr, buf), recovery, source);
+    }
+}
+
+void sgwc_pgw_release_lost_sessions(void)
+{
+    sgwc_ue_t *sgwc_ue = NULL;
+    sgwc_sess_t *sess = NULL;
+    ogs_gtp_node_t *pgw = NULL;
+    int count = 0;
+    bool more = false;
+
+    ogs_list_for_each(&sgwc_self()->sgw_ue_list, sgwc_ue) {
+        ogs_list_for_each(&sgwc_ue->sess_list, sess) {
+            sgwc_pgw_state_t *state = NULL;
+
+            if (!sess->gnode || !sess->gnode->data_ptr)
+                continue;
+            state = sess->gnode->data_ptr;
+            if (!state->release_pending)
+                continue;
+            if (!ogs_gtp2_session_predates_restart(
+                        sess->pgw_restart_counter_known,
+                        sess->pgw_restart_counter, state->restart_counter))
+                continue;
+            if (sess->release_to_mme_pending)
+                continue;
+
+            if (count >= SGWC_PGW_RELEASE_BATCH) {
+                more = true;
+                goto done;
+            }
+
+            if (sgwc_gtp_send_delete_bearer_request_to_mme(sess,
+                    OGS_GTP2_CAUSE_REACTIVATION_REQUESTED) != OGS_OK)
+                ogs_expect(OGS_OK ==
+                    sgwc_pfcp_send_session_deletion_request(
+                        sess, OGS_INVALID_POOL_ID, NULL));
+            count++;
+        }
+    }
+
+done:
+    if (count)
+        ogs_info("PGW restart: released %d PDN connection(s)%s",
+                count, more ? ", more to follow" : "");
+
+    if (more) {
+        ogs_timer_start(sgwc_self()->t_pgw_release, SGWC_PGW_RELEASE_PACING);
+    } else {
+        ogs_list_for_each(&sgwc_self()->pgw_s5c_list, pgw) {
+            if (pgw->data_ptr)
+                ((sgwc_pgw_state_t *)pgw->data_ptr)->release_pending = false;
+        }
+    }
 }

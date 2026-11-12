@@ -48,6 +48,8 @@ void sgwc_context_init(void)
     memset(&self, 0, sizeof(sgwc_context_t));
     /* KI-170: changes on every start, like the PGW-C's (KI-123) */
     self.gtpc_restart_counter = ogs_gtp2_restart_counter_from_time(time(NULL));
+    /* KI-174, TS 29.274 §7.1.1: not more often than every 60 s per path */
+    self.pgw_echo_interval = ogs_time_from_sec(60);
 
     ogs_log_install_domain(&__sgwc_log_domain, "sgwc", ogs_core()->log.level);
 
@@ -97,6 +99,16 @@ void sgwc_context_final(void)
     ogs_pool_final(&sgwc_sxa_seid_pool);
 
     ogs_gtp_node_remove_all(&self.mme_s11_list);
+    {
+        /* KI-174: per-PGW restart state */
+        ogs_gtp_node_t *pgw = NULL;
+        ogs_list_for_each(&self.pgw_s5c_list, pgw) {
+            if (pgw->data_ptr) {
+                ogs_free(pgw->data_ptr);
+                pgw->data_ptr = NULL;
+            }
+        }
+    }
     ogs_gtp_node_remove_all(&self.pgw_s5c_list);
 
     context_initialized = 0;
@@ -150,6 +162,11 @@ int sgwc_context_parse_config(void)
                     /* handle config in pfcp library */
                 } else if (!strcmp(sgwc_key, "sgwu")) {
                     /* handle config in pfcp library */
+                } else if (!strcmp(sgwc_key, "pgw_echo_interval")) {
+                    /* KI-174: seconds between S5/S8 Echo Requests, 0 = off */
+                    const char *v = ogs_yaml_iter_value(&sgwc_iter);
+                    if (v) self.pgw_echo_interval =
+                        ogs_time_from_sec(atoi(v));
                 } else
                     ogs_warn("unknown key `%s`", sgwc_key);
             }

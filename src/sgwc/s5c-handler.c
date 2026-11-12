@@ -324,6 +324,14 @@ void sgwc_s5c_handle_create_session_response(
     /* Setup GTP Node */
     OGS_SETUP_GTP_NODE(sess, pgw);
 
+    /* KI-174: the PGW's restart counter for this session */
+    if (rsp->recovery.presence) {
+        sess->pgw_restart_counter = rsp->recovery.u8;
+        sess->pgw_restart_counter_known = true;
+        sgwc_pgw_recovery_received(pgw, rsp->recovery.u8,
+                "Create Session Response");
+    }
+
     ogs_assert(ogs_list_count(&sess->bearer_list));
     ogs_info("    sess_id=%d xact=%p", sess->id, s11_xact);
     ogs_assert(OGS_OK ==

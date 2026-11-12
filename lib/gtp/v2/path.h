@@ -50,6 +50,14 @@ uint8_t ogs_gtp2_restart_counter_from_time(time_t start_time);
 bool ogs_gtp2_peer_restart_detected(
         uint8_t *stored, bool *known, uint8_t received);
 
+/*
+ * KI-174: a session belongs to the peer's previous life when the peer's
+ * restart counter seen at its setup is unknown or differs from the
+ * peer's current one.
+ */
+bool ogs_gtp2_session_predates_restart(
+        bool session_known, uint8_t session_counter, uint8_t peer_counter);
+
 void ogs_gtp2_send_echo_request(
         ogs_gtp_node_t *gnode, uint8_t recovery, uint8_t features);
 void ogs_gtp2_send_echo_response(ogs_gtp_xact_t *xact,

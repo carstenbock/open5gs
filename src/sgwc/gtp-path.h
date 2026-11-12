@@ -38,6 +38,12 @@ int sgwc_gtp_send_downlink_data_notification(
 int sgwc_gtp_send_delete_bearer_request_to_mme(
         sgwc_sess_t *sess, uint8_t cause_value);
 
+/* KI-174 */
+void sgwc_pgw_path_init(void);
+void sgwc_pgw_recovery_received(
+        ogs_gtp_node_t *gnode, uint8_t recovery, const char *source);
+void sgwc_pgw_release_lost_sessions(void);
+
 #ifdef __cplusplus
 }
 #endif

@@ -35,9 +35,21 @@ static void sgwc_handle_echo_request(
 }
 
 static void sgwc_handle_echo_response(
-        ogs_gtp_xact_t *s11_xact, ogs_gtp2_echo_response_t *rsp)
+        ogs_gtp_xact_t *xact, ogs_gtp2_echo_response_t *rsp)
 {
-    /* Not Implemented */
+    int rv;
+    ogs_gtp_node_t *gnode = NULL;
+
+    ogs_assert(xact);
+    ogs_assert(rsp);
+
+    gnode = xact->gnode;
+    rv = ogs_gtp_xact_commit(xact);
+    ogs_expect(rv == OGS_OK);
+
+    /* KI-174: PGW restart detection */
+    if (rsp->recovery.presence)
+        sgwc_pgw_recovery_received(gnode, rsp->recovery.u8, "Echo Response");
 }
 
 

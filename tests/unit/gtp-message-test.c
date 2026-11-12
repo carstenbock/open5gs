@@ -374,6 +374,17 @@ static void gtp_restart_counter_test(abts_case *tc, void *data)
     ABTS_INT_EQUAL(tc, 1, msg.echo_response.recovery.presence);
     ABTS_INT_EQUAL(tc, own, msg.echo_response.recovery.u8);
     ogs_pkbuf_free(pkbuf);
+
+    /*
+     * KI-174: after a PGW restart only the sessions set up before it are
+     * released; a session set up after it (new counter) is kept.
+     */
+    ABTS_INT_EQUAL(tc, true, ogs_gtp2_session_predates_restart(
+                true, 17, 18));
+    ABTS_INT_EQUAL(tc, false, ogs_gtp2_session_predates_restart(
+                true, 18, 18));
+    ABTS_INT_EQUAL(tc, true, ogs_gtp2_session_predates_restart(
+                false, 0, 18));
 }
 
 abts_suite *test_gtp_message(abts_suite *suite)
