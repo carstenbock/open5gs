@@ -69,6 +69,20 @@ int emm_handle_attach_request(enb_ue_t *enb_ue, mme_ue_t *mme_ue,
     }
     CLEAR_MME_UE_TIMER(mme_ue->t3422);
 
+    /*
+     * KI-186: a stored paging action belongs to the old registration. For
+     * an idle UE whose last PDN connection was released the MME pages with
+     * "detach to UE"; the UE then attaches anew, and after its Initial
+     * Context Setup the stored action sent the Detach Request and detached
+     * it a second time (2026-11-12 22:55:15). Drop it.
+     */
+    if (MME_PAGING_ONGOING(mme_ue)) {
+        ogs_warn("[%s] Attach request: pending paging action %d dropped",
+                mme_ue->imsi_bcd, mme_ue->paging.type);
+        CLEAR_MME_UE_TIMER(mme_ue->t3413);
+        MME_CLEAR_PAGING_INFO(mme_ue);
+    }
+
     ogs_assert(esm_message_container);
     if (!esm_message_container->length) {
         ogs_error("No ESM Message Container");
