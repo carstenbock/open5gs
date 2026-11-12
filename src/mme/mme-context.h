@@ -1105,6 +1105,13 @@ typedef struct mme_bearer_s {
     struct {
         ogs_list_t  xact_list;
     } update;
+
+    /*
+     * ESM cause for the Deactivate EPS Bearer Context Request that answers
+     * a network-initiated Delete Bearer Request. 0 means
+     * OGS_NAS_ESM_CAUSE_REGULAR_DEACTIVATION (#36).
+     */
+    uint8_t         deactivation_esm_cause;
 } mme_bearer_t;
 
 void mme_context_init(void);

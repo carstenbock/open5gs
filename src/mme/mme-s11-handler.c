@@ -1148,6 +1148,22 @@ void mme_s11_handle_create_bearer_request(
             ogs_expect(r == OGS_OK);
             ogs_assert(r != OGS_ERROR);
         }
+    } else if (ECM_IDLE(mme_ue)) {
+        /*
+         * Visited-core patch (KI-120): the default bearer is not active yet
+         * (attach or PDN connectivity still running) and the S1 connection
+         * of the UE is already gone (eNB Reset, UE context release). The
+         * pending ESM procedure cannot complete, so the dedicated bearer
+         * cannot be activated either. Upstream keeps the request without an
+         * answer until the PGW gives up; reject it at once instead
+         * (TS 23.401 §5.4.1 step 7: the MME answers with the result).
+         */
+        ogs_warn("[%s] Create Bearer Request while the default bearer "
+                "is inactive and no S1 context: rejected [EBI:%d]",
+                mme_ue->imsi_bcd, bearer->ebi);
+        ogs_expect(OGS_OK == mme_gtp_send_create_bearer_response(
+                    bearer, OGS_GTP2_CAUSE_UE_NOT_RESPONDING));
+        mme_bearer_remove(bearer);
     } else {
         MME_CLEAR_PAGING_INFO(mme_ue);
         /*
@@ -1437,6 +1453,58 @@ void mme_s11_handle_delete_bearer_request(
      */
     ogs_assert(xact->id >= OGS_MIN_POOL_ID && xact->id <= OGS_MAX_POOL_ID);
     bearer->delete.xact_id = xact->id;
+
+    /*
+     * Visited-core patch (KI-119): a PDN connection released with
+     * GTP cause "Reactivation requested" (PGW-C shutdown drain, SGW-C after
+     * a GTP-U Error Indication).
+     *
+     * TS 24.301 §6.4.4.2: the MME uses ESM cause #39 "reactivation
+     * requested" so that the UE re-requests the PDN connection
+     * (upstream always sends #36 "regular deactivation").
+     *
+     * TS 23.401 §5.4.4.1 / TS 24.301 §6.4.4.2: the default bearer of the
+     * last PDN connection is not deactivated with ESM signalling; the MME
+     * detaches the UE instead, with detach type "re-attach required".
+     */
+    bearer->deactivation_esm_cause = 0;
+    if (req->linked_eps_bearer_id.presence == 1 &&
+        req->cause.presence && req->cause.data &&
+        ((ogs_gtp2_cause_t *)req->cause.data)->value ==
+            OGS_GTP2_CAUSE_REACTIVATION_REQUESTED) {
+        bearer->deactivation_esm_cause =
+            OGS_NAS_ESM_CAUSE_REACTIVATION_REQUESTED;
+
+        if (mme_sess_count(mme_ue) == 1) {
+            ogs_info("[%s] Last PDN connection released with "
+                    "reactivation requested: detach, re-attach required",
+                    mme_ue->imsi_bcd);
+
+            ogs_expect(OGS_OK == mme_gtp_send_delete_bearer_response(
+                        bearer, OGS_GTP2_CAUSE_REQUEST_ACCEPTED));
+            MME_SESS_CLEAR(sess);
+
+            memset(&mme_ue->nas_eps.detach, 0, sizeof(ogs_nas_detach_type_t));
+            mme_ue->nas_eps.detach.value =
+                OGS_NAS_DETACH_TYPE_TO_UE_RE_ATTACH_REQUIRED;
+            mme_ue->nas_eps.type = MME_EPS_TYPE_DETACH_REQUEST_TO_UE;
+            mme_ue->detach_type = MME_DETACH_TYPE_MME_EXPLICIT;
+
+            if (ECM_IDLE(mme_ue)) {
+                MME_STORE_PAGING_INFO(mme_ue,
+                    MME_PAGING_TYPE_DETACH_TO_UE, NULL);
+                r = s1ap_send_paging(mme_ue, S1AP_CNDomain_ps);
+                ogs_expect(r == OGS_OK);
+                ogs_assert(r != OGS_ERROR);
+            } else {
+                MME_CLEAR_PAGING_INFO(mme_ue);
+                r = nas_eps_send_detach_request(mme_ue);
+                ogs_expect(r == OGS_OK);
+                ogs_assert(r != OGS_ERROR);
+            }
+            return;
+        }
+    }
 
     if (ECM_IDLE(mme_ue)) {
         MME_STORE_PAGING_INFO(mme_ue,

@@ -746,7 +746,9 @@ int nas_eps_send_deactivate_bearer_context_request(mme_bearer_t *bearer)
     }
 
     esmbuf = esm_build_deactivate_bearer_context_request(
-            bearer, OGS_NAS_ESM_CAUSE_REGULAR_DEACTIVATION);
+            bearer, bearer->deactivation_esm_cause ?
+                bearer->deactivation_esm_cause :
+                OGS_NAS_ESM_CAUSE_REGULAR_DEACTIVATION);
     if (!esmbuf) {
         ogs_error("esm_build_deactivate_bearer_context_request() failed");
         return OGS_ERROR;

@@ -49,8 +49,16 @@ void mme_send_delete_session_or_detach(enb_ue_t *enb_ue, mme_ue_t *mme_ue)
 
     /* MME Explicit Detach, ie: O&M Procedures */
     case MME_DETACH_TYPE_MME_EXPLICIT:
-        ogs_fatal("Not Implemented : MME_DETACH_TYPE_MME_EXPLICIT");
-        ogs_assert_if_reached();
+        /*
+         * Visited-core patch (KI-119): used for the detach with
+         * "re-attach required" after the last PDN connection was released
+         * with "reactivation requested" (TS 23.401 §5.3.8.3). The PDN
+         * connection is already gone; delete whatever is left, like the
+         * HSS-initiated explicit detach does.
+         */
+        ogs_debug("Explicit MME Detach");
+        mme_gtp_send_delete_all_sessions(
+                enb_ue, mme_ue, OGS_GTP_DELETE_NO_ACTION);
         break;
 
     /* HSS Explicit Detach, ie: Subscription Withdrawl Cancel Location
