@@ -162,15 +162,48 @@ void mme_s11_handle_echo_request(
     ogs_assert(req);
 
     ogs_debug("Receiving Echo Request");
-    /* FIXME : Before implementing recovery counter correctly,
-     *         I'll re-use the recovery value in request message */
-    ogs_gtp2_send_echo_response(xact, req->recovery.u8, 0);
+    /* KI-170: own restart counter, not the requester's */
+    ogs_gtp2_send_echo_response(xact, mme_self()->gtpc_restart_counter, 0);
 }
 
 void mme_s11_handle_echo_response(
         ogs_gtp_xact_t *xact, ogs_gtp2_echo_response_t *rsp)
 {
-    /* Not Implemented */
+    int rv;
+    mme_sgw_t *sgw = NULL, *iter = NULL;
+    ogs_gtp_node_t *gnode = NULL;
+    bool first;
+    char buf[OGS_ADDRSTRLEN];
+
+    ogs_assert(xact);
+    ogs_assert(rsp);
+
+    gnode = xact->gnode;
+    rv = ogs_gtp_xact_commit(xact);
+    ogs_expect(rv == OGS_OK);
+
+    /* KI-170: restart detection for the SGWs (TS 23.007) */
+    ogs_list_for_each(&mme_self()->sgw_list, iter) {
+        if (&iter->gnode == gnode) {
+            sgw = iter;
+            break;
+        }
+    }
+    if (!sgw || !rsp->recovery.presence)
+        return;
+
+    first = !sgw->restart_counter_known;
+    if (ogs_gtp2_peer_restart_detected(&sgw->restart_counter,
+                &sgw->restart_counter_known, rsp->recovery.u8)) {
+        ogs_warn("SGW [%s] restarted (restart counter now %d): releasing "
+                "the PDN connections established before the restart",
+                OGS_ADDR(&gnode->addr, buf), rsp->recovery.u8);
+        sgw->release_pending = true;
+        mme_sgw_release_lost_sessions();
+    } else if (first) {
+        ogs_info("SGW [%s] restart counter %d",
+                OGS_ADDR(&gnode->addr, buf), rsp->recovery.u8);
+    }
 }
 
 static void mme_s11_create_session_fail(
@@ -396,6 +429,27 @@ void mme_s11_handle_create_session_response(
         fail_cause = session_cause;
         fail_reason = "Session Cause not accepted";
         goto fail;
+    }
+
+    /*
+     * KI-170: remember the SGW's restart counter for this UE's sessions.
+     * A new value also means the SGW restarted since its last answer; the
+     * older sessions on it are released through the timer, not here.
+     */
+    if (rsp->recovery.presence && target_ue) {
+        mme_sgw_t *sgw = target_ue->sgw;
+
+        target_ue->restart_counter = rsp->recovery.u8;
+        target_ue->restart_counter_known = true;
+
+        if (sgw && ogs_gtp2_peer_restart_detected(&sgw->restart_counter,
+                    &sgw->restart_counter_known, rsp->recovery.u8)) {
+            ogs_warn("[%s] SGW restarted (restart counter now %d in "
+                    "Create Session Response)",
+                    mme_ue->imsi_bcd, rsp->recovery.u8);
+            sgw->release_pending = true;
+            ogs_timer_start(mme_self()->t_sgw_release, ogs_time_from_msec(1));
+        }
     }
 
     /********************

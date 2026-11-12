@@ -61,6 +61,10 @@ ogs_pkbuf_t *sgwc_s11_build_create_session_response(
 
     cause.value = OGS_GTP2_CAUSE_REQUEST_ACCEPTED;
 
+    /* KI-170: own restart counter towards the MME */
+    rsp->recovery.presence = 1;
+    rsp->recovery.u8 = sgwc_self()->gtpc_restart_counter;
+
     /* Send Control Plane(UL) : SGW-S11 */
     memset(&sgw_s11_teid, 0, sizeof(ogs_gtp2_f_teid_t));
     sgw_s11_teid.interface_type = OGS_GTP2_F_TEID_S11_S4_SGW_GTP_C;

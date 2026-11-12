@@ -46,6 +46,8 @@ void sgwc_context_init(void)
     ogs_assert(context_initialized == 0);
 
     memset(&self, 0, sizeof(sgwc_context_t));
+    /* KI-170: changes on every start, like the PGW-C's (KI-123) */
+    self.gtpc_restart_counter = ogs_gtp2_restart_counter_from_time(time(NULL));
 
     ogs_log_install_domain(&__sgwc_log_domain, "sgwc", ogs_core()->log.level);
 

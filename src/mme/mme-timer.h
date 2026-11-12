@@ -47,6 +47,9 @@ typedef enum {
 
     MME_TIMER_GN_HOLDING,
 
+    MME_TIMER_SGW_ECHO,
+    MME_TIMER_SGW_RELEASE,
+
     MME_TIMER_SGS_CLI_CONN_TO_SRV,
 
     MAX_NUM_OF_MME_TIMER,
@@ -79,6 +82,8 @@ void mme_timer_sgs_cli_conn_to_srv(void *data);
 void mme_timer_s1_holding_timer_expire(void *data);
 void mme_timer_s11_holding_timer_expire(void *data);
 void mme_timer_gn_holding_timer_expire(void *data);
+void mme_timer_sgw_echo_expire(void *data);
+void mme_timer_sgw_release_expire(void *data);
 
 #ifdef __cplusplus
 }

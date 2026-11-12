@@ -22,6 +22,7 @@
 #include "mme-event.h"
 #include "mme-gn-build.h"
 #include "mme-gtp-path.h"
+#include "mme-timer.h"
 #include "mme-path.h"
 #include "s1ap-path.h"
 #include "mme-s11-build.h"
@@ -248,6 +249,16 @@ int mme_gtp_open(void)
         ogs_assert(rv == OGS_OK);
     }
 
+    /* KI-170: S11 Echo Requests towards the SGWs (restart detection) */
+    mme_self()->t_sgw_echo = ogs_timer_add(
+            ogs_app()->timer_mgr, mme_timer_sgw_echo_expire, NULL);
+    ogs_assert(mme_self()->t_sgw_echo);
+    mme_self()->t_sgw_release = ogs_timer_add(
+            ogs_app()->timer_mgr, mme_timer_sgw_release_expire, NULL);
+    ogs_assert(mme_self()->t_sgw_release);
+    if (mme_self()->sgw_echo_interval)
+        ogs_timer_start(mme_self()->t_sgw_echo, ogs_time_from_sec(1));
+
     ogs_list_for_each(&mme_self()->sgsn_list, sgsn) {
         rv = ogs_gtp_connect(
                 ogs_gtp_self()->gtpc_sock, ogs_gtp_self()->gtpc_sock6,
@@ -260,6 +271,16 @@ int mme_gtp_open(void)
 
 void mme_gtp_close(void)
 {
+    /* KI-170 */
+    if (mme_self()->t_sgw_echo) {
+        ogs_timer_delete(mme_self()->t_sgw_echo);
+        mme_self()->t_sgw_echo = NULL;
+    }
+    if (mme_self()->t_sgw_release) {
+        ogs_timer_delete(mme_self()->t_sgw_release);
+        mme_self()->t_sgw_release = NULL;
+    }
+
     ogs_socknode_remove_all(&ogs_gtp_self()->gtpc_list);
     ogs_socknode_remove_all(&ogs_gtp_self()->gtpc_list6);
 }
@@ -1011,4 +1032,86 @@ int mme_gtp1_send_ran_information_relay(
     ogs_expect(rv == OGS_OK);
 
     return rv;
+}
+
+/*
+ * KI-170: S11 path management (TS 29.274 §7.1, TS 23.007). Echo Requests
+ * carry the MME's own restart counter; the Echo Responses tell the MME
+ * when an SGW restarted (mme_s11_handle_echo_response()).
+ */
+void mme_gtp_send_echo_to_sgws(void)
+{
+    mme_sgw_t *sgw = NULL;
+
+    ogs_list_for_each(&mme_self()->sgw_list, sgw)
+        ogs_gtp2_send_echo_request(
+                &sgw->gnode, mme_self()->gtpc_restart_counter, 0);
+
+    if (mme_self()->sgw_echo_interval)
+        ogs_timer_start(mme_self()->t_sgw_echo,
+                mme_self()->sgw_echo_interval);
+}
+
+#define MME_SGW_RELEASE_BATCH       50
+#define MME_SGW_RELEASE_PACING      ogs_time_from_msec(100)
+
+/*
+ * KI-170: after an SGW restart, release the PDN connections that were
+ * established before it, at most MME_SGW_RELEASE_BATCH UEs per
+ * MME_SGW_RELEASE_PACING. A connected UE gets Detach Request "re-attach
+ * required"; an idle UE loses its sessions and is rejected with EMM
+ * cause #9 on its next Service Request or TAU (same path as KI-164).
+ * Sessions created after the restart carry the new restart counter in
+ * their Create Session Response and are kept.
+ */
+void mme_sgw_release_lost_sessions(void)
+{
+    mme_sgw_t *sgw = NULL;
+    sgw_ue_t *sgw_ue = NULL, *next_sgw_ue = NULL;
+    int count = 0;
+    bool more = false;
+
+    ogs_list_for_each(&mme_self()->sgw_list, sgw) {
+        bool left = false;
+
+        if (sgw->release_pending == false)
+            continue;
+
+        ogs_list_for_each_safe(&sgw->sgw_ue_list, next_sgw_ue, sgw_ue) {
+            mme_ue_t *mme_ue = NULL;
+            enb_ue_t *enb_ue = NULL;
+
+            if (sgw_ue->restart_counter_known &&
+                sgw_ue->restart_counter == sgw->restart_counter)
+                continue;
+
+            mme_ue = mme_ue_find_by_id(sgw_ue->mme_ue_id);
+            if (!mme_ue || mme_ue->sgw_ue_id != sgw_ue->id)
+                continue;
+            if (!SESSION_CONTEXT_IS_AVAILABLE(mme_ue) ||
+                ogs_list_count(&mme_ue->sess_list) == 0)
+                continue;
+
+            if (count >= MME_SGW_RELEASE_BATCH) {
+                left = true;
+                break;
+            }
+
+            enb_ue = enb_ue_find_by_id(mme_ue->enb_ue_id);
+            mme_send_detach_after_sgw_context_loss(enb_ue, mme_ue);
+            count++;
+        }
+
+        if (left)
+            more = true;
+        else
+            sgw->release_pending = false;
+    }
+
+    if (count)
+        ogs_info("SGW restart: released the sessions of %d UE(s)%s",
+                count, more ? ", more to follow" : "");
+
+    if (more)
+        ogs_timer_start(mme_self()->t_sgw_release, MME_SGW_RELEASE_PACING);
 }

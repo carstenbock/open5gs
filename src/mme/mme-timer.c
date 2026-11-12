@@ -100,6 +100,10 @@ const char *mme_timer_get_name(mme_timer_e id)
         return "MME_TIMER_S1_HOLDING";
     case MME_TIMER_S11_HOLDING:
         return "MME_TIMER_S11_HOLDING";
+    case MME_TIMER_SGW_ECHO:
+        return "MME_TIMER_SGW_ECHO";
+    case MME_TIMER_SGW_RELEASE:
+        return "MME_TIMER_SGW_RELEASE";
     default:
        break;
     }
@@ -266,4 +270,30 @@ void mme_timer_gn_holding_timer_expire(void *data)
         ogs_error("ogs_queue_push() failed:%d", (int)rv);
         mme_event_free(e);
     }
+}
+
+/* KI-170: S11 path management towards the SGWs */
+static void sgw_timer_event_send(mme_timer_e timer_id)
+{
+    int rv;
+    mme_event_t *e = NULL;
+
+    e = mme_event_new(MME_EVENT_S11_TIMER);
+    e->timer_id = timer_id;
+
+    rv = ogs_queue_push(ogs_app()->queue, e);
+    if (rv != OGS_OK) {
+        ogs_error("ogs_queue_push() failed:%d", (int)rv);
+        mme_event_free(e);
+    }
+}
+
+void mme_timer_sgw_echo_expire(void *data)
+{
+    sgw_timer_event_send(MME_TIMER_SGW_ECHO);
+}
+
+void mme_timer_sgw_release_expire(void *data)
+{
+    sgw_timer_event_send(MME_TIMER_SGW_RELEASE);
 }

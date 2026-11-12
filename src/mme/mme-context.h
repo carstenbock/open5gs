@@ -158,6 +158,12 @@ typedef struct mme_context_s {
     /* S1SetupResponse */
     uint8_t         relative_capacity;
 
+    /* KI-170: own GTP-C restart counter and S11 echo towards the SGWs */
+    uint8_t         gtpc_restart_counter;
+    ogs_time_t      sgw_echo_interval;  /* 0: no Echo Requests */
+    ogs_timer_t     *t_sgw_echo;
+    ogs_timer_t     *t_sgw_release;
+
     /* Generator for unique identification */
     uint32_t        mme_ue_s1ap_id;         /* mme_ue_s1ap_id generator */
 
@@ -208,6 +214,15 @@ typedef struct mme_sgw_s {
     int             num_of_e_cell_id;
 
     ogs_list_t      sgw_ue_list;
+
+    /*
+     * KI-170: the SGW's GTP-C restart counter from its Echo Responses
+     * (TS 23.007). When it changes, the PDN connections that were
+     * established before the restart are released (paced).
+     */
+    uint8_t         restart_counter;
+    bool            restart_counter_known;
+    bool            release_pending;
 } mme_sgw_t;
 
 typedef struct mme_pgw_s {
@@ -366,6 +381,14 @@ struct sgw_ue_s {
 
     /* UE identity */
     uint32_t        sgw_s11_teid;   /* SGW-S11-TEID is received from SGW */
+
+    /*
+     * KI-170: the SGW's restart counter in the last Create Session Response
+     * for this UE. Sessions created after an SGW restart carry the new
+     * value and are not released when the restart is detected.
+     */
+    uint8_t         restart_counter;
+    bool            restart_counter_known;
 
     /* S11 Holding timer for removing this context */
     ogs_timer_t     *t_s11_holding;

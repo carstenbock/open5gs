@@ -72,6 +72,10 @@ int mme_gtp1_send_ran_information_relay(
         mme_sgsn_t *sgsn, const uint8_t *buf, size_t len,
         const ogs_nas_rai_t *rai, uint16_t cell_id);
 
+/* KI-170 */
+void mme_gtp_send_echo_to_sgws(void);
+void mme_sgw_release_lost_sessions(void);
+
 #ifdef __cplusplus
 }
 #endif

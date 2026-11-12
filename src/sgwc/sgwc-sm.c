@@ -30,9 +30,8 @@ static void sgwc_handle_echo_request(
     ogs_assert(req);
 
     ogs_debug("[SGW] Receiving Echo Request");
-    /* FIXME : Before implementing recovery counter correctly,
-     *         I'll re-use the recovery value in request message */
-    ogs_gtp2_send_echo_response(xact, req->recovery.u8, 0);
+    /* KI-170: own restart counter, not the requester's (S11 and S5/S8) */
+    ogs_gtp2_send_echo_response(xact, sgwc_self()->gtpc_restart_counter, 0);
 }
 
 static void sgwc_handle_echo_response(

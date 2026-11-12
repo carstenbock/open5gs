@@ -430,6 +430,14 @@ void sgwc_sxa_handle_session_establishment_response(
         create_session_request->pgw_s5_s8_address_for_control_plane_or_pmip.
             presence = 0;
 
+        /*
+         * KI-170: the relayed request carried the MME's Recovery value;
+         * the PGW must see the SGW's own restart counter instead.
+         */
+        create_session_request->recovery.presence = 1;
+        create_session_request->recovery.u8 =
+            sgwc_self()->gtpc_restart_counter;
+
         /* Bearer Contexts */
         for (i = 0; i < num_of_sgw_s5u; i++) {
             create_session_request->bearer_contexts_to_be_created[i].

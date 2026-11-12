@@ -47,6 +47,9 @@ typedef struct sgwc_context_s {
     ogs_hash_t *sgwc_sxa_seid_hash; /* hash table (SGWC-SXA-SEID : Session) */
 
     ogs_list_t sgw_ue_list;    /* SGW_UE List */
+
+    /* KI-170: own GTP-C restart counter (Recovery IE) */
+    uint8_t gtpc_restart_counter;
 } sgwc_context_t;
 
 typedef struct sgwc_ue_s {

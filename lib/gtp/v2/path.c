@@ -280,3 +280,26 @@ void ogs_gtp1_send_error_indication(
 
     ogs_pkbuf_free(pkbuf);
 }
+
+uint8_t ogs_gtp2_restart_counter_from_time(time_t start_time)
+{
+    return (uint8_t)(start_time & 0xff);
+}
+
+bool ogs_gtp2_peer_restart_detected(
+        uint8_t *stored, bool *known, uint8_t received)
+{
+    ogs_assert(stored);
+    ogs_assert(known);
+
+    if (*known == false) {
+        *stored = received;
+        *known = true;
+        return false;
+    }
+    if (*stored == received)
+        return false;
+
+    *stored = received;
+    return true;
+}

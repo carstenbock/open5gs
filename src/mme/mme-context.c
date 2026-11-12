@@ -81,6 +81,10 @@ void mme_context_init(void)
     /* Initialize MME context */
     memset(&self, 0, sizeof(mme_context_t));
     self.diam_config = &g_diam_conf;
+    /* KI-170 */
+    self.gtpc_restart_counter = ogs_gtp2_restart_counter_from_time(time(NULL));
+    /* TS 29.274 §7.1.1: not more often than every 60 s per path */
+    self.sgw_echo_interval = ogs_time_from_sec(60);
 
     ogs_log_install_domain(&__ogs_sctp_domain, "sctp", ogs_core()->log.level);
     ogs_log_install_domain(&__ogs_s1ap_domain, "s1ap", ogs_core()->log.level);
@@ -595,6 +599,11 @@ int mme_context_parse_config(void)
                                 ogs_warn("unknown key `%s`", fd_key);
                         }
                     }
+                } else if (!strcmp(mme_key, "sgw_echo_interval")) {
+                    /* KI-170: seconds between S11 Echo Requests, 0 = off */
+                    const char *v = ogs_yaml_iter_value(&mme_iter);
+                    if (v) self.sgw_echo_interval =
+                        ogs_time_from_sec(atoi(v));
                 } else if (!strcmp(mme_key, "relative_capacity")) {
                     const char *v = ogs_yaml_iter_value(&mme_iter);
                     if (v) self.relative_capacity = atoi(v);

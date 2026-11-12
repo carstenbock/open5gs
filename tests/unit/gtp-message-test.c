@@ -313,11 +313,75 @@ static void gtp_message_test1(abts_case *tc, void *data)
     ogs_pkbuf_free(pkbuf);
 }
 
+/*
+ * KI-170: own restart counter and peer restart detection. The counter must
+ * change when the process restarts (a new start time) and the first value
+ * seen from a peer must not count as a restart, or every peer would
+ * release all sessions on first contact.
+ */
+static void gtp_restart_counter_test(abts_case *tc, void *data)
+{
+    uint8_t stored = 0;
+    bool known = false;
+    ogs_pkbuf_t *pkbuf = NULL;
+    ogs_gtp2_message_t msg;
+    uint8_t own;
+
+    /* a restart one second later gives a different counter */
+    ABTS_TRUE(tc, ogs_gtp2_restart_counter_from_time(1794500000) !=
+            ogs_gtp2_restart_counter_from_time(1794500001));
+    /* the same start time gives the same counter */
+    ABTS_INT_EQUAL(tc, ogs_gtp2_restart_counter_from_time(1794500000),
+            ogs_gtp2_restart_counter_from_time(1794500000));
+
+    /* first sighting is not a restart */
+    ABTS_INT_EQUAL(tc, false, ogs_gtp2_peer_restart_detected(
+                &stored, &known, 17));
+    ABTS_INT_EQUAL(tc, true, known);
+    ABTS_INT_EQUAL(tc, 17, stored);
+    /* same value: no restart */
+    ABTS_INT_EQUAL(tc, false, ogs_gtp2_peer_restart_detected(
+                &stored, &known, 17));
+    /* new value: restart, and the new value is kept */
+    ABTS_INT_EQUAL(tc, true, ogs_gtp2_peer_restart_detected(
+                &stored, &known, 18));
+    ABTS_INT_EQUAL(tc, 18, stored);
+    ABTS_INT_EQUAL(tc, false, ogs_gtp2_peer_restart_detected(
+                &stored, &known, 18));
+    /* wrap-around 255 -> 0 is a restart too */
+    stored = 255;
+    ABTS_INT_EQUAL(tc, true, ogs_gtp2_peer_restart_detected(
+                &stored, &known, 0));
+
+    /* an Echo Response carries our own counter, not the requester's */
+    own = ogs_gtp2_restart_counter_from_time(1794500042);
+    pkbuf = ogs_gtp2_build_echo_response(
+            OGS_GTP2_ECHO_RESPONSE_TYPE, own, 0);
+    ABTS_PTR_NOTNULL(tc, pkbuf);
+    /* ogs_gtp2_build_msg() builds the body; add a header without TEID */
+    {
+        uint16_t body_len = pkbuf->len;
+        uint8_t *h = ogs_pkbuf_push(pkbuf, 8);
+        ABTS_PTR_NOTNULL(tc, h);
+        memset(h, 0, 8);
+        h[0] = 0x40;                        /* version 2, no TEID */
+        h[1] = OGS_GTP2_ECHO_RESPONSE_TYPE;
+        h[2] = (uint8_t)((body_len + 4) >> 8);
+        h[3] = (uint8_t)((body_len + 4) & 0xff);
+    }
+    memset(&msg, 0, sizeof(msg));
+    ABTS_INT_EQUAL(tc, OGS_OK, ogs_gtp2_parse_msg(&msg, pkbuf));
+    ABTS_INT_EQUAL(tc, 1, msg.echo_response.recovery.presence);
+    ABTS_INT_EQUAL(tc, own, msg.echo_response.recovery.u8);
+    ogs_pkbuf_free(pkbuf);
+}
+
 abts_suite *test_gtp_message(abts_suite *suite)
 {
     suite = ADD_SUITE(suite)
 
     abts_run_test(suite, gtp_message_test1, NULL);
+    abts_run_test(suite, gtp_restart_counter_test, NULL);
 
     return suite;
 }

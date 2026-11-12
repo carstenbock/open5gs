@@ -819,6 +819,16 @@ cleanup:
         break;
 
     case MME_EVENT_S11_TIMER:
+        /* KI-170: S11 path management, not bound to a UE */
+        if (e->timer_id == MME_TIMER_SGW_ECHO) {
+            mme_gtp_send_echo_to_sgws();
+            break;
+        }
+        if (e->timer_id == MME_TIMER_SGW_RELEASE) {
+            mme_sgw_release_lost_sessions();
+            break;
+        }
+
         sgw_ue = sgw_ue_find_by_id(e->sgw_ue_id);
         if (!sgw_ue) {
             ogs_error("SGW-UE Context has already been removed");

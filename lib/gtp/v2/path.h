@@ -34,6 +34,22 @@ ogs_pkbuf_t *ogs_gtp2_handle_echo_req(ogs_pkbuf_t *pkb);
 void ogs_gtp2_send_error_message(
         ogs_gtp_xact_t *xact, uint32_t teid, uint8_t type, uint8_t cause_value);
 
+/*
+ * KI-170: own GTP-C restart counter (TS 23.007, Recovery IE of
+ * TS 29.274). Derived from the process start time like the PGW-C's
+ * (KI-123), so it changes on every restart without a state file and also
+ * after a container is recreated.
+ */
+uint8_t ogs_gtp2_restart_counter_from_time(time_t start_time);
+
+/*
+ * KI-170: track a peer's restart counter. The first value seen is stored
+ * and is not a restart. Returns true when a later value differs (the peer
+ * restarted); the new value is then stored.
+ */
+bool ogs_gtp2_peer_restart_detected(
+        uint8_t *stored, bool *known, uint8_t received);
+
 void ogs_gtp2_send_echo_request(
         ogs_gtp_node_t *gnode, uint8_t recovery, uint8_t features);
 void ogs_gtp2_send_echo_response(ogs_gtp_xact_t *xact,
