@@ -62,6 +62,11 @@ typedef struct sgwc_pgw_state_s {
     uint8_t     restart_counter;
     bool        restart_counter_known;
     bool        release_pending;
+
+    /* KI-182: the counter before the last restart; a late answer of the
+     * old PGW instance carries it and must not count as another restart */
+    uint8_t     previous_counter;
+    bool        previous_counter_known;
 } sgwc_pgw_state_t;
 
 typedef struct sgwc_ue_s {

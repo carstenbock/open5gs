@@ -465,14 +465,43 @@ void sgwc_pgw_recovery_received(
     state = gnode->data_ptr;
 
     first = !state->restart_counter_known;
-    if (ogs_gtp2_peer_restart_detected(&state->restart_counter,
-                &state->restart_counter_known, recovery)) {
-        ogs_warn("PGW [%s] restarted (restart counter now %d, %s): "
-                "releasing the PDN connections set up before the restart",
+
+    /*
+     * KI-182: an answer of the old PGW instance that arrives after the
+     * restart was detected carries the previous counter. It is not another
+     * restart; its session belongs to the old instance and is released
+     * with the others (its own counter differs from the current one).
+     */
+    if (state->restart_counter_known && state->previous_counter_known &&
+        recovery != state->restart_counter &&
+        recovery == state->previous_counter) {
+        ogs_warn("PGW [%s] late answer of the old instance "
+                "(restart counter %d, %s)",
                 OGS_ADDR(&gnode->addr, buf), recovery, source);
         state->release_pending = true;
         ogs_timer_start(sgwc_self()->t_pgw_release, ogs_time_from_msec(1));
-    } else if (first) {
+        return;
+    }
+
+    {
+        uint8_t old_counter = state->restart_counter;
+        bool old_known = state->restart_counter_known;
+
+        if (ogs_gtp2_peer_restart_detected(&state->restart_counter,
+                    &state->restart_counter_known, recovery)) {
+            state->previous_counter = old_counter;
+            state->previous_counter_known = old_known;
+            ogs_warn("PGW [%s] restarted (restart counter now %d, %s): "
+                    "releasing the PDN connections set up before the "
+                    "restart", OGS_ADDR(&gnode->addr, buf), recovery, source);
+            state->release_pending = true;
+            ogs_timer_start(sgwc_self()->t_pgw_release,
+                    ogs_time_from_msec(1));
+            return;
+        }
+    }
+
+    if (first) {
         ogs_info("PGW [%s] restart counter %d (%s)",
                 OGS_ADDR(&gnode->addr, buf), recovery, source);
     }
@@ -495,7 +524,15 @@ void sgwc_pgw_release_lost_sessions(void)
             state = sess->gnode->data_ptr;
             if (!state->release_pending)
                 continue;
+            /*
+             * KI-182: a session whose Create Session Response has not
+             * arrived yet is still being set up; whether it belongs to the
+             * old or the new PGW instance is decided by the Recovery value
+             * in its own response (a late answer of the old instance
+             * triggers another release pass, see above).
+             */
             if (!ogs_gtp2_session_predates_restart(
+                        sess->pgw_s5c_teid != 0,
                         sess->pgw_restart_counter_known,
                         sess->pgw_restart_counter, state->restart_counter))
                 continue;

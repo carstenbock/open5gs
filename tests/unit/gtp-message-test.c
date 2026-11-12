@@ -380,11 +380,18 @@ static void gtp_restart_counter_test(abts_case *tc, void *data)
      * released; a session set up after it (new counter) is kept.
      */
     ABTS_INT_EQUAL(tc, true, ogs_gtp2_session_predates_restart(
-                true, 17, 18));
+                true, true, 17, 18));
     ABTS_INT_EQUAL(tc, false, ogs_gtp2_session_predates_restart(
-                true, 18, 18));
+                true, true, 18, 18));
     ABTS_INT_EQUAL(tc, true, ogs_gtp2_session_predates_restart(
-                false, 0, 18));
+                true, false, 0, 18));
+    /*
+     * KI-182: a session still waiting for its Create Session Response
+     * (request sent before the restart, answered by the new instance) is
+     * not released; its own response decides.
+     */
+    ABTS_INT_EQUAL(tc, false, ogs_gtp2_session_predates_restart(
+                false, false, 0, 18));
 
     /* PGW Back-Off Time (EPC Timer, TS 29.274 §8.87) for T3396 */
     ABTS_INT_EQUAL(tc, 10, ogs_gtp2_epc_timer_to_sec(0x05));    /* 5x2 s */
