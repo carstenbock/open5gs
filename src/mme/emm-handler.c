@@ -56,6 +56,19 @@ int emm_handle_attach_request(enb_ue_t *enb_ue, mme_ue_t *mme_ue,
     ogs_assert(mme_ue);
     ogs_assert(enb_ue);
 
+    /*
+     * Visited-core patch (KI-186): an Attach Request ends a pending
+     * network-initiated detach (TS 24.301 §5.5.2.3.5, collision with an
+     * attach). Upstream kept T3422 running, so the Detach Request was
+     * retransmitted after the new attach had completed and the UE was
+     * detached a second time.
+     */
+    if (mme_ue->t3422.timer && mme_ue->t3422.timer->running) {
+        ogs_warn("[%s] Attach request during a pending detach: "
+                "detach aborted", mme_ue->imsi_bcd);
+    }
+    CLEAR_MME_UE_TIMER(mme_ue->t3422);
+
     ogs_assert(esm_message_container);
     if (!esm_message_container->length) {
         ogs_error("No ESM Message Container");
