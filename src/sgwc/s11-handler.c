@@ -1225,7 +1225,36 @@ void sgwc_s11_handle_delete_bearer_response(
      ********************/
     ogs_assert(s11_xact);
     s5c_xact = ogs_gtp_xact_find_by_id(s11_xact->assoc_xact_id);
-    ogs_assert(s5c_xact);
+    if (!s5c_xact) {
+        /*
+         * Visited-core patch (KI-119): answer to the SGW-initiated
+         * Delete Bearer Request after a GTP-U Error Indication from the
+         * PGW-U (sgwc_gtp_send_delete_bearer_request_to_mme()). Nothing is
+         * relayed to the PGW; delete the session locally.
+         */
+        if (s11_xact->data) {
+            bearer_id = OGS_POINTER_TO_UINT(s11_xact->data);
+            bearer = sgwc_bearer_find_by_id(bearer_id);
+        }
+        if (bearer)
+            sess = sgwc_sess_find_by_id(bearer->sess_id);
+
+        rv = ogs_gtp_xact_commit(s11_xact);
+        ogs_expect(rv == OGS_OK);
+
+        if (!sess) {
+            ogs_error("No Session for SGW-initiated Delete Bearer Response");
+            return;
+        }
+        if (rsp->cause.presence && rsp->cause.data)
+            ogs_info("    Cause[%d] from MME",
+                    ((ogs_gtp2_cause_t *)rsp->cause.data)->value);
+
+        ogs_assert(OGS_OK ==
+            sgwc_pfcp_send_session_deletion_request(
+                sess, OGS_INVALID_POOL_ID, NULL));
+        return;
+    }
 
     if (s11_xact->xid & OGS_GTP_CMD_XACT_ID) {
         /* MME received Bearer Resource Modification Request */

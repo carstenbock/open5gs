@@ -99,6 +99,13 @@ typedef struct sgwc_sess_s {
     ogs_pfcp_node_t *pfcp_node;
 
     ogs_pool_id_t   sgwc_ue_id;
+
+    /*
+     * Visited-core patch (KI-119): a Delete Bearer Request for this
+     * session's default bearer has been sent to the MME after a GTP-U
+     * Error Indication; further Error Indications are ignored.
+     */
+    bool            release_to_mme_pending;
 } sgwc_sess_t;
 
 typedef struct sgwc_bearer_s {

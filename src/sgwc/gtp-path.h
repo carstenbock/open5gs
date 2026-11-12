@@ -35,6 +35,9 @@ int sgwc_gtp_send_create_session_response(
 int sgwc_gtp_send_downlink_data_notification(
     uint8_t cause_value, sgwc_bearer_t *bearer);
 
+int sgwc_gtp_send_delete_bearer_request_to_mme(
+        sgwc_sess_t *sess, uint8_t cause_value);
+
 #ifdef __cplusplus
 }
 #endif

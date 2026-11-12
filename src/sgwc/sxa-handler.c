@@ -1632,9 +1632,16 @@ void sgwc_sxa_handle_session_report_request(
                 if (sgwc_default_bearer_in_sess(sess) == bearer) {
                     ogs_error("[%s] Error Indication(Default Bearer) from SMF",
                                 sgwc_ue->imsi_bcd);
-                    ogs_assert(OGS_OK ==
-                        sgwc_pfcp_send_session_deletion_request(
-                            sess, OGS_INVALID_POOL_ID, NULL));
+                    /*
+                     * Visited-core patch (KI-119): tell the MME first; the
+                     * session is deleted when it answers. Fall back to the
+                     * upstream local deletion if there is no S11 path.
+                     */
+                    if (sgwc_gtp_send_delete_bearer_request_to_mme(sess,
+                            OGS_GTP2_CAUSE_REACTIVATION_REQUESTED) != OGS_OK)
+                        ogs_assert(OGS_OK ==
+                            sgwc_pfcp_send_session_deletion_request(
+                                sess, OGS_INVALID_POOL_ID, NULL));
                 } else {
                     ogs_error("[%s] Error Indication(Dedicated Bearer) "
                             "from SMF", sgwc_ue->imsi_bcd);

@@ -18,6 +18,7 @@
  */
 
 #include "gtp-path.h"
+#include "pfcp-path.h"
 
 static void _gtpv2_c_recv_cb(short when, ogs_socket_t fd, void *data)
 {
@@ -257,6 +258,121 @@ int sgwc_gtp_send_downlink_data_notification(
         return OGS_ERROR;
     }
     gtp_xact->local_teid = sgwc_ue->sgw_s11_teid;
+
+    rv = ogs_gtp_xact_commit(gtp_xact);
+    ogs_expect(rv == OGS_OK);
+
+    return rv;
+}
+
+/*
+ * Visited-core patch (KI-119): a PDN connection lost at the PGW.
+ *
+ * Upstream deletes the session locally when the PGW-U answers S5/S8-U
+ * traffic of a default bearer with a GTP-U Error Indication, so the MME
+ * and the UE keep a dead PDN connection. Tell the MME with a Delete Bearer
+ * Request for the default bearer (Linked EBI) and cause "Reactivation
+ * requested" (TS 29.274 Delete Bearer Request, cause values Table 8.4-1),
+ * so that the UE re-requests the PDN connection instead of keeping a dead
+ * one (TS 23.007 restoration principle: the bearers of a lost PDN
+ * connection are released towards the UE). The session is deleted locally
+ * when the MME answers or the request times out.
+ */
+static void delete_bearer_timeout(ogs_gtp_xact_t *xact, void *data)
+{
+    sgwc_bearer_t *bearer = NULL;
+    sgwc_sess_t *sess = NULL;
+    sgwc_ue_t *sgwc_ue = NULL;
+    ogs_pool_id_t bearer_id = OGS_INVALID_POOL_ID;
+
+    ogs_assert(xact);
+    ogs_assert(data);
+    bearer_id = OGS_POINTER_TO_UINT(data);
+
+    bearer = sgwc_bearer_find_by_id(bearer_id);
+    if (!bearer) {
+        ogs_warn("Bearer[%d] has already been removed", bearer_id);
+        return;
+    }
+    sess = sgwc_sess_find_by_id(bearer->sess_id);
+    if (!sess) {
+        ogs_warn("Session[%d] has already been removed", bearer->sess_id);
+        return;
+    }
+    sgwc_ue = sgwc_ue_find_by_id(sess->sgwc_ue_id);
+
+    ogs_error("[%s] No Delete Bearer Response; deleting the session locally",
+            sgwc_ue ? sgwc_ue->imsi_bcd : "Unknown");
+    ogs_expect(OGS_OK ==
+        sgwc_pfcp_send_session_deletion_request(
+            sess, OGS_INVALID_POOL_ID, NULL));
+}
+
+int sgwc_gtp_send_delete_bearer_request_to_mme(
+        sgwc_sess_t *sess, uint8_t cause_value)
+{
+    int rv;
+
+    sgwc_ue_t *sgwc_ue = NULL;
+    sgwc_bearer_t *bearer = NULL;
+
+    ogs_gtp_xact_t *gtp_xact = NULL;
+
+    ogs_gtp2_message_t message;
+    ogs_gtp2_delete_bearer_request_t *req = NULL;
+    ogs_gtp2_cause_t cause;
+    ogs_pkbuf_t *pkbuf = NULL;
+
+    ogs_assert(sess);
+    sgwc_ue = sgwc_ue_find_by_id(sess->sgwc_ue_id);
+    ogs_assert(sgwc_ue);
+    bearer = sgwc_default_bearer_in_sess(sess);
+    ogs_assert(bearer);
+
+    if (!sgwc_ue->gnode || !sgwc_ue->mme_s11_teid) {
+        ogs_error("[%s] No S11 path to the MME", sgwc_ue->imsi_bcd);
+        return OGS_ERROR;
+    }
+
+    if (sess->release_to_mme_pending) {
+        ogs_warn("[%s] Delete Bearer Request to MME already pending",
+                sgwc_ue->imsi_bcd);
+        return OGS_OK;
+    }
+
+    ogs_info("[%s] Delete Bearer Request to MME [LBI:%d CAUSE:%d]",
+            sgwc_ue->imsi_bcd, bearer->ebi, cause_value);
+
+    memset(&message, 0, sizeof(ogs_gtp2_message_t));
+    message.h.type = OGS_GTP2_DELETE_BEARER_REQUEST_TYPE;
+    message.h.teid = sgwc_ue->mme_s11_teid;
+
+    req = &message.delete_bearer_request;
+
+    req->linked_eps_bearer_id.presence = 1;
+    req->linked_eps_bearer_id.u8 = bearer->ebi;
+
+    memset(&cause, 0, sizeof(cause));
+    cause.value = cause_value;
+    req->cause.presence = 1;
+    req->cause.len = sizeof(cause);
+    req->cause.data = &cause;
+
+    pkbuf = ogs_gtp2_build_msg(&message);
+    if (!pkbuf) {
+        ogs_error("ogs_gtp2_build_msg() failed");
+        return OGS_ERROR;
+    }
+
+    gtp_xact = ogs_gtp_xact_local_create(
+            sgwc_ue->gnode, &message.h, pkbuf, delete_bearer_timeout,
+            OGS_UINT_TO_POINTER(bearer->id));
+    if (!gtp_xact) {
+        ogs_error("ogs_gtp_xact_local_create() failed");
+        return OGS_ERROR;
+    }
+    gtp_xact->local_teid = sgwc_ue->sgw_s11_teid;
+    sess->release_to_mme_pending = true;
 
     rv = ogs_gtp_xact_commit(gtp_xact);
     ogs_expect(rv == OGS_OK);
