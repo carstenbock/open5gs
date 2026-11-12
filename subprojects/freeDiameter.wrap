@@ -1,4 +1,4 @@
 [wrap-git]
 directory = freeDiameter
 url = https://github.com/carstenbock/freeDiameter.git
-revision = master
+revision = bf265a51f9c17490fe6b268d557296f78c4d1d98
