@@ -285,14 +285,21 @@ ogs_pkbuf_t *sgwc_sxa_build_bearer_to_modify_list(
             num_of_create_far + num_of_update_pdr + num_of_update_far;
 
     if (!total) {
-        ogs_error("PFCP Session Modification build invalid state: "
+        /*
+         * Visited-core patch (KI-131): upstream aborts here. Seen on
+         * test-agent-4 after a tracking area update of a UE whose PDN
+         * connection was half released; the abort dropped every session of
+         * the SGW-C. A PFCP Session Modification Request without IEs is
+         * valid (TS 29.244 §7.5.4: all IEs are conditional or optional), so
+         * send it and let the procedure finish normally.
+         */
+        ogs_error("PFCP Session Modification without changes: "
                 "sess_id=%d xact=%p flags=0x%llx remove_pdr=%d remove_far=%d "
                 "create_pdr=%d create_far=%d update_pdr=%d update_far=%d",
                 sess->id, xact, (unsigned long long)modify_flags,
                 num_of_remove_pdr, num_of_remove_far,
                 num_of_create_pdr, num_of_create_far,
                 num_of_update_pdr, num_of_update_far);
-        ogs_assert_if_reached();
     }
 
     pfcp_message->h.type = type;
