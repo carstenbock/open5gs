@@ -2528,16 +2528,18 @@ void smf_gsm_state_wait_pfcp_deletion(ogs_fsm_t *s, smf_event_t *e)
                         gtp_xact = NULL; /* answered */
                     }
                 }
-                if (send_ccr_termination_req_gx_gy_s6b(
-                            sess, gtp_xact) == true) {
+                /*
+                 * KI-62: answer the Delete Session / Delete PDP Context now
+                 * and end Gx, Gy and S6b afterwards. TS 29.274 §7.2.10 does
+                 * not make the response wait for the PCRF/OCS/AAA; waiting
+                 * for their answers made the SGW/ePDG give up during a
+                 * mass teardown (slow Gy), and the session was kept.
+                 */
+                send_gtp_delete_rsp(sess, gtp_xact);
+                if (send_ccr_termination_req_gx_gy_s6b(sess, NULL) == true)
                     OGS_FSM_TRAN(s, smf_gsm_state_wait_epc_auth_release);
-                } else {
-                    /* No Diameter session to end: answer and release now.
-                     * Before, a Delete Session with no Gy peer was rejected
-                     * here and the session was never removed (KI-62). */
-                    send_gtp_delete_rsp(sess, gtp_xact);
+                else
                     OGS_FSM_TRAN(s, smf_gsm_state_session_will_release);
-                }
             } else {
                 int r, trigger;
 
@@ -3200,6 +3202,23 @@ void smf_gsm_state_wait_epc_auth_release(ogs_fsm_t *s, smf_event_t *e)
         sess->sm_data.gx_cca_term_err = ER_DIAMETER_SUCCESS;
         sess->sm_data.gy_cca_term_err = ER_DIAMETER_SUCCESS;
         sess->sm_data.s6b_sta_err = ER_DIAMETER_SUCCESS;
+        /* KI-62: do not wait for ever for an answer that never comes */
+        smf_sess_start_auth_release_guard(sess);
+        break;
+
+    case OGS_FSM_EXIT_SIG:
+        smf_sess_stop_auth_release_guard(sess);
+        break;
+
+    case SMF_EVT_SESSION_RELEASE:
+        /* The guard timer expired (KI-62) */
+        ogs_warn("[%s] No answer to the Diameter terminations "
+                "[Gx:%d Gy:%d S6b:%d]: releasing the session",
+                sess->session.name ? sess->session.name : "",
+                sess->sm_data.gx_ccr_term_in_flight,
+                sess->sm_data.gy_ccr_term_in_flight,
+                sess->sm_data.s6b_str_in_flight);
+        OGS_FSM_TRAN(s, smf_gsm_state_session_will_release);
         break;
 
     case SMF_EVT_GN_MESSAGE:

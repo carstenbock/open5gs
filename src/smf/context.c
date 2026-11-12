@@ -20,6 +20,7 @@
 #include "context.h"
 #include "gtp-path.h"
 #include "pfcp-path.h"
+#include "local-path.h"
 
 static smf_context_t self;
 static ogs_diam_config_t g_diam_conf;
@@ -78,6 +79,7 @@ void smf_context_init(void)
     smf_ctf_config_init(&self.ctf_config);
     self.diam_config = &g_diam_conf;
     self.shutdown_drain_timeout = ogs_time_from_sec(15);
+    self.shutdown_drain_rate = 2000;
     self.gtpc_restart_counter = (uint8_t)(time(NULL) & 0xff);
 
     ogs_log_install_domain(&__ogs_ngap_domain, "ngap", ogs_core()->log.level);
@@ -740,6 +742,13 @@ int smf_context_parse_config(void)
                     if (v)
                         self.shutdown_drain_timeout =
                             ogs_time_from_sec(atoi(v));
+
+                } else if (!strcmp(smf_key, "shutdown_drain_rate")) {
+                    /* Sessions per second released by the shutdown drain
+                     * (default 2000, 0 = all at once), KI-174. */
+                    const char *v = ogs_yaml_iter_value(&smf_iter);
+                    if (v)
+                        self.shutdown_drain_rate = atoi(v);
 
                 } else if (!strcmp(smf_key, "p-cscf-policy")) {
                     ogs_yaml_iter_t policy_iter;
@@ -2345,6 +2354,8 @@ void smf_sess_remove(smf_sess_t *sess)
     smf_ue = smf_ue_find_by_id(sess->smf_ue_id);
     ogs_assert(smf_ue);
 
+    smf_sess_stop_auth_release_guard(sess);
+
     ogs_info("Removed Session: UE IMSI:[%s] DNN:[%s:%d] IPv4:[%s] IPv6:[%s]",
             smf_ue->supi ? smf_ue->supi : smf_ue->imsi_bcd,
             sess->session.name, sess->psi,
@@ -3453,6 +3464,46 @@ void smf_bearer_qos_update(smf_bearer_t *bearer)
     qer->mbr.downlink = bearer->qos.mbr.downlink;
     qer->gbr.uplink = bearer->qos.gbr.uplink;
     qer->gbr.downlink = bearer->qos.gbr.downlink;
+}
+
+/*
+ * KI-62: a session waiting for its Gx/Gy/S6b termination answers is released
+ * after SMF_AUTH_RELEASE_GUARD even if an answer never arrives (freeDiameter
+ * has no request timeout here); late answers find no session and are dropped.
+ */
+#define SMF_AUTH_RELEASE_GUARD ogs_time_from_sec(30)
+
+static void auth_release_guard_expired(void *data)
+{
+    ogs_pool_id_t sess_id = OGS_POINTER_TO_UINT(data);
+    smf_sess_t *sess = smf_sess_find_by_id(sess_id);
+
+    if (!sess)
+        return;
+    smf_trigger_session_release(
+            sess, NULL, OGS_PFCP_DELETE_TRIGGER_LOCAL_INITIATED);
+}
+
+void smf_sess_start_auth_release_guard(smf_sess_t *sess)
+{
+    ogs_assert(sess);
+
+    if (!sess->t_auth_release) {
+        sess->t_auth_release = ogs_timer_add(ogs_app()->timer_mgr,
+                auth_release_guard_expired, OGS_UINT_TO_POINTER(sess->id));
+        ogs_assert(sess->t_auth_release);
+    }
+    ogs_timer_start(sess->t_auth_release, SMF_AUTH_RELEASE_GUARD);
+}
+
+void smf_sess_stop_auth_release_guard(smf_sess_t *sess)
+{
+    ogs_assert(sess);
+
+    if (sess->t_auth_release) {
+        ogs_timer_delete(sess->t_auth_release);
+        sess->t_auth_release = NULL;
+    }
 }
 
 smf_bearer_t *smf_default_bearer_in_sess(smf_sess_t *sess)
