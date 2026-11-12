@@ -82,6 +82,12 @@ void smf_trigger_session_release(smf_sess_t *sess,
 static ogs_thread_mutex_t drain_mutex;
 static bool drain_done;
 static ogs_time_t drain_started;
+/* Effective deadline: the configured timeout, but no longer than the paced
+ * release needs plus SMF_DRAIN_ANSWER_TIME for the last answers. With a few
+ * sessions the old PGW-C must not keep the address (Recreate) for the whole
+ * timeout while the UEs' new attaches find no PGW-C (KI-174). */
+static ogs_time_t drain_deadline;
+#define SMF_DRAIN_ANSWER_TIME ogs_time_from_sec(5)
 
 static bool drain_candidate(smf_sess_t *sess)
 {
@@ -162,7 +168,7 @@ static void drain_check(void *data)
         return;
     }
 
-    if (elapsed >= smf_self()->shutdown_drain_timeout) {
+    if (elapsed >= drain_deadline) {
         ogs_warn("Shutdown drain: timeout after %lld ms, "
                 "%d EPC session(s) not released",
                 (long long)ogs_time_to_msec(elapsed), count);
@@ -229,8 +235,17 @@ void smf_drain_start(void)
         }
     }
 
+    drain_deadline = SMF_DRAIN_ANSWER_TIME;
+    if (smf_self()->shutdown_drain_rate > 0)
+        drain_deadline += ogs_time_from_sec(
+                (count + smf_self()->shutdown_drain_rate - 1) /
+                smf_self()->shutdown_drain_rate);
+    if (drain_deadline > smf_self()->shutdown_drain_timeout)
+        drain_deadline = smf_self()->shutdown_drain_timeout;
+
     ogs_info("Shutdown drain: releasing %d EPC session(s) "
-            "[timeout:%lld ms, rate:%d/s]", count,
+            "[deadline:%lld ms, timeout:%lld ms, rate:%d/s]", count,
+            (long long)ogs_time_to_msec(drain_deadline),
             (long long)ogs_time_to_msec(smf_self()->shutdown_drain_timeout),
             smf_self()->shutdown_drain_rate);
 

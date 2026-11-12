@@ -152,16 +152,13 @@ void smf_state_operational(ogs_fsm_t *s, smf_event_t *e)
             smf_metrics_inst_gtp_node_inc(smf_gnode->metrics, SMF_METR_GTP_NODE_CTR_S5C_RX_CREATESESSIONREQ);
             if (smf_self()->draining) {
                 /* Shutdown drain (KI-119): this SMF is about to exit, so a
-                 * new PDN connection would be lost at once. "No resources
-                 * available" (TS 29.274 Table 8.4-1) is a temporary
-                 * rejection; the UE retries later, by then towards the
-                 * restarted SMF. */
-                ogs_warn("Shutdown drain: Create Session Request rejected");
-                ogs_gtp2_send_error_message(gtp_xact,
-                        gtp2_sender_f_teid.teid_presence == true ?
-                            gtp2_sender_f_teid.teid : 0,
-                        OGS_GTP2_CREATE_SESSION_RESPONSE_TYPE,
-                        OGS_GTP2_CAUSE_NO_RESOURCES_AVAILABLE);
+                 * new PDN connection would be lost at once. Do not answer
+                 * (KI-174): a rejection reaches the UE as an ESM reject that
+                 * counts towards T3402 (a UE gave up for 12 min after five),
+                 * while an unanswered request is retransmitted by the
+                 * SGW/ePDG and the restarted SMF answers the retransmission
+                 * if it is up within N3 x T3. */
+                ogs_warn("Shutdown drain: Create Session Request not answered");
                 break;
             }
             if (gtp2_message.h.teid == 0) {
