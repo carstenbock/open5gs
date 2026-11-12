@@ -1397,6 +1397,34 @@ void mme_s11_handle_update_bearer_request(
     }
 }
 
+/*
+ * KI-174: true when every other PDN connection of the UE is already being
+ * released with "reactivation requested" (its default bearer has a
+ * pending Delete Bearer Request with ESM #39). Then the current release
+ * removes the UE's last PDN connection.
+ */
+static bool other_pdns_released_with_reactivation(
+        mme_ue_t *mme_ue, mme_sess_t *sess)
+{
+    mme_sess_t *other = NULL;
+
+    ogs_list_for_each(&mme_ue->sess_list, other) {
+        mme_bearer_t *other_default = NULL;
+
+        if (other == sess)
+            continue;
+        other_default = mme_default_bearer_in_sess(other);
+        if (!other_default)
+            return false;
+        if (other_default->deactivation_esm_cause !=
+                OGS_NAS_ESM_CAUSE_REACTIVATION_REQUESTED)
+            return false;
+        if (!ogs_gtp_xact_find_by_id(other_default->delete.xact_id))
+            return false;
+    }
+    return true;
+}
+
 void mme_s11_handle_delete_bearer_request(
         ogs_gtp_xact_t *xact, mme_ue_t *mme_ue,
         ogs_gtp2_delete_bearer_request_t *req)
@@ -1526,13 +1554,37 @@ void mme_s11_handle_delete_bearer_request(
         bearer->deactivation_esm_cause =
             OGS_NAS_ESM_CAUSE_REACTIVATION_REQUESTED;
 
-        if (mme_sess_count(mme_ue) == 1) {
+        if (mme_sess_count(mme_ue) == 1 ||
+            other_pdns_released_with_reactivation(mme_ue, sess)) {
+            mme_sess_t *other = NULL, *next_other = NULL;
+
             ogs_info("[%s] Last PDN connection released with "
                     "reactivation requested: detach, re-attach required",
                     mme_ue->imsi_bcd);
 
             ogs_expect(OGS_OK == mme_gtp_send_delete_bearer_response(
                         bearer, OGS_GTP2_CAUSE_REQUEST_ACCEPTED));
+            /*
+             * KI-174: every other PDN connection of the UE is being
+             * released the same way (PGW restart, PGW-C drain): answer
+             * their pending Delete Bearer Requests too, so that the UE
+             * attaches again instead of being left with no PDN connection
+             * after ESM #39 (some UEs do not re-request the PDN, KI-157).
+             */
+            ogs_list_for_each_safe(&mme_ue->sess_list, next_other, other) {
+                mme_bearer_t *other_default = NULL;
+
+                if (other == sess)
+                    continue;
+                other_default = mme_default_bearer_in_sess(other);
+                if (other_default &&
+                    other_default->delete.xact_id >= OGS_MIN_POOL_ID &&
+                    other_default->delete.xact_id <= OGS_MAX_POOL_ID)
+                    ogs_expect(OGS_OK == mme_gtp_send_delete_bearer_response(
+                                other_default,
+                                OGS_GTP2_CAUSE_REQUEST_ACCEPTED));
+                MME_SESS_CLEAR(other);
+            }
             MME_SESS_CLEAR(sess);
 
             memset(&mme_ue->nas_eps.detach, 0, sizeof(ogs_nas_detach_type_t));
