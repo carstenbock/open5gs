@@ -71,6 +71,14 @@ static int pcscf_rx_fb_cb(struct msg **msg, struct avp *avp,
     return ENOTSUP;
 }
 
+/*
+ * Overrides for the next test_rx_send_aar_audio() (pcc-test, KI-70/KI-71):
+ * Media-Type of the media component and a Flow-Status AVP in it; -1 keeps
+ * the default (AUDIO, no Flow-Status). Reset after each request.
+ */
+int test_rx_aar_media_type = -1;
+int test_rx_aar_flow_status = -1;
+
 void test_rx_send_aar_audio(uint8_t **rx_sid,
         test_sess_t *sess, int id_type, int qos_type, int flow_type)
 {
@@ -293,11 +301,24 @@ void test_rx_send_aar_audio(uint8_t **rx_sid,
 
     ret = fd_msg_avp_new(ogs_diam_rx_media_type, 0, &avpch1);
     ogs_assert(ret == 0);
-    val.i32 = OGS_DIAM_RX_MEDIA_TYPE_AUDIO;
+    val.i32 = test_rx_aar_media_type >= 0 ?
+        test_rx_aar_media_type : OGS_DIAM_RX_MEDIA_TYPE_AUDIO;
     ret = fd_msg_avp_setvalue (avpch1, &val);
     ogs_assert(ret == 0);
     ret = fd_msg_avp_add (avp, MSG_BRW_LAST_CHILD, avpch1);
     ogs_assert(ret == 0);
+
+    if (test_rx_aar_flow_status >= 0) {
+        ret = fd_msg_avp_new(ogs_diam_rx_flow_status, 0, &avpch1);
+        ogs_assert(ret == 0);
+        val.i32 = test_rx_aar_flow_status;
+        ret = fd_msg_avp_setvalue (avpch1, &val);
+        ogs_assert(ret == 0);
+        ret = fd_msg_avp_add (avp, MSG_BRW_LAST_CHILD, avpch1);
+        ogs_assert(ret == 0);
+    }
+    test_rx_aar_media_type = -1;
+    test_rx_aar_flow_status = -1;
 
     if (qos_type == 0) {
         /* Nothing */

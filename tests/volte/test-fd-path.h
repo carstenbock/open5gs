@@ -35,6 +35,8 @@ void test_rx_final(void);
 int test_cx_init(void);
 void test_cx_final(void);
 
+extern int test_rx_aar_media_type;
+extern int test_rx_aar_flow_status;
 void test_rx_send_aar_audio(uint8_t **rx_sid,
         test_sess_t *sess, int id_type, int qos_type, int flow_type);
 void test_rx_send_aar_video(uint8_t **rx_sid, test_sess_t *sess, int id_type);

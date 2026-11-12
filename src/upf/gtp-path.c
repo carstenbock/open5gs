@@ -517,6 +517,16 @@ static void _gtpv1_u_recv_cb(short when, ogs_socket_t fd, void *data)
         ogs_assert(far);
 
         /*
+         * Gate Status of the QER (TS 29.244 §5.4.3), KI-70: uplink packets
+         * to N6 are written to the TUN device below without
+         * ogs_pfcp_up_handle_pdr(), so the uplink gate is checked here.
+         */
+        if (pdr->qer && pdr->qer->gate_status.uplink == OGS_PFCP_GATE_CLOSE) {
+            ogs_trace("Uplink gate closed: PDR[%d] dropped", pdr->id);
+            goto cleanup;
+        }
+
+        /*
          * From Issue #1354
          *
          * Do not check Router Advertisement

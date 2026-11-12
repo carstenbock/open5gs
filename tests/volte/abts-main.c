@@ -27,6 +27,7 @@ abts_suite *test_simple(abts_suite *suite);
 abts_suite *test_rx(abts_suite *suite);
 abts_suite *test_video(abts_suite *suite);
 abts_suite *test_cx(abts_suite *suite);
+abts_suite *test_pcc(abts_suite *suite);
 
 const struct testlist {
     abts_suite *(*func)(abts_suite *suite);
@@ -37,6 +38,7 @@ const struct testlist {
     {test_rx},
     {test_video},
     {test_cx},
+    {test_pcc},
     {NULL},
 };
 
