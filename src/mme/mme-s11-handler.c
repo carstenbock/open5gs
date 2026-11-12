@@ -672,6 +672,12 @@ void mme_s11_handle_modify_bearer_response(
         cause_value = OGS_GTP2_CAUSE_CONTEXT_NOT_FOUND;
     }
 
+    /* KI-164: the S-GW lost the UE's sessions */
+    if (mme_s11_context_lost(session_cause, mme_ue_from_teid)) {
+        mme_send_detach_after_sgw_context_loss(enb_ue, mme_ue);
+        return;
+    }
+
     if (cause_value != OGS_GTP2_CAUSE_REQUEST_ACCEPTED) {
         if (enb_ue)
             mme_send_delete_session_or_mme_ue_context_release(enb_ue, mme_ue);
@@ -1579,6 +1585,22 @@ void mme_s11_handle_release_access_bearers_response(
         cause_value = cause->value;
         if (cause_value != OGS_GTP2_CAUSE_REQUEST_ACCEPTED)
             ogs_error("GTP Cause [VALUE:%d, ACTION:%d]", cause_value, action);
+    }
+
+    /*
+     * KI-164: the S-GW lost the UE's sessions. Only for the normal
+     * release of an active UE (eNB still connected); the S1 reset and
+     * connection-refused actions keep their upstream handling.
+     */
+    if (action == OGS_GTP_RELEASE_SEND_UE_CONTEXT_RELEASE_COMMAND &&
+        mme_s11_context_lost(cause_value, mme_ue_from_teid)) {
+        ogs_list_for_each(&mme_ue->sess_list, sess) {
+            ogs_list_for_each(&sess->bearer_list, bearer) {
+                CLEAR_ENB_S1U_PATH(bearer);
+            }
+        }
+        mme_send_detach_after_sgw_context_loss(enb_ue, mme_ue);
+        return;
     }
 
     /********************

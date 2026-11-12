@@ -469,3 +469,55 @@ void mme_send_tau_accept_and_check_release(enb_ue_t *enb_ue, mme_ue_t *mme_ue)
         mme_send_release_access_bearer_or_ue_context_release(enb_ue);
     }
 }
+
+/*
+ * KI-164: the S-GW no longer knows the UE's sessions (S-GW restart without
+ * its sessions). It answers the UE's Modify Bearer or Release Access
+ * Bearers Request with cause "Context Not Found" and a zero TEID.
+ */
+bool mme_s11_context_lost(uint8_t cause_value, mme_ue_t *mme_ue_from_teid)
+{
+    return cause_value == OGS_GTP2_CAUSE_CONTEXT_NOT_FOUND ||
+        mme_ue_from_teid == NULL;
+}
+
+/*
+ * KI-164: restoration after the S-GW lost the UE's PDN connections
+ * (TS 23.007, S-GW failure; TS 24.301 §5.5.2.3.1). Upstream only released
+ * the UE context and kept the dead sessions, so the UE stayed without PDN
+ * connections until it attached again by itself.
+ *
+ * The sessions are removed locally (the S-GW has none to delete). A UE in
+ * ECM-CONNECTED gets Detach Request "re-attach required" now; on Detach
+ * Accept the UE context is released as usual. An ECM-IDLE UE has no
+ * session context left, so its next Service Request or TAU is rejected
+ * with EMM cause #9 and it attaches again.
+ */
+void mme_send_detach_after_sgw_context_loss(
+        enb_ue_t *enb_ue, mme_ue_t *mme_ue)
+{
+    int r;
+    mme_sess_t *sess = NULL, *next_sess = NULL;
+
+    ogs_assert(mme_ue);
+
+    ogs_warn("[%s] S-GW has no context for the UE's sessions: "
+            "removing them, detach with re-attach required",
+            mme_ue->imsi_bcd);
+
+    ogs_list_for_each_safe(&mme_ue->sess_list, next_sess, sess)
+        MME_SESS_CLEAR(sess);
+
+    memset(&mme_ue->nas_eps.detach, 0, sizeof(ogs_nas_detach_type_t));
+    mme_ue->nas_eps.detach.value =
+        OGS_NAS_DETACH_TYPE_TO_UE_RE_ATTACH_REQUIRED;
+    mme_ue->nas_eps.type = MME_EPS_TYPE_DETACH_REQUEST_TO_UE;
+    mme_ue->detach_type = MME_DETACH_TYPE_MME_EXPLICIT;
+
+    if (enb_ue && !ECM_IDLE(mme_ue)) {
+        MME_CLEAR_PAGING_INFO(mme_ue);
+        r = nas_eps_send_detach_request(mme_ue);
+        ogs_expect(r == OGS_OK);
+        ogs_assert(r != OGS_ERROR);
+    }
+}
