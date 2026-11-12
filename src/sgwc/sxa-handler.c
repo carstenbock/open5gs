@@ -1181,6 +1181,13 @@ void sgwc_sxa_handle_session_modification_response(
                 i++;
             }
 
+            /*
+             * KI-170: the relayed response carries the PGW's Recovery
+             * value; the MME must see the SGW's own restart counter.
+             */
+            gtp_rsp->recovery.presence = 1;
+            gtp_rsp->recovery.u8 = sgwc_self()->gtpc_restart_counter;
+
             recv_message->h.type = OGS_GTP2_CREATE_SESSION_RESPONSE_TYPE;
             recv_message->h.teid = sgwc_ue->mme_s11_teid;
 

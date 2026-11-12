@@ -432,24 +432,15 @@ void mme_s11_handle_create_session_response(
     }
 
     /*
-     * KI-170: remember the SGW's restart counter for this UE's sessions.
-     * A new value also means the SGW restarted since its last answer; the
-     * older sessions on it are released through the timer, not here.
+     * KI-170: remember the SGW's restart counter for this UE's sessions,
+     * so that a later SGW restart (detected by Echo only) spares sessions
+     * created after it. The SGW-level detection does not use this value:
+     * a relaying SGW that passes on the PGW's Recovery IE would otherwise
+     * make the two sources flap.
      */
     if (rsp->recovery.presence && target_ue) {
-        mme_sgw_t *sgw = target_ue->sgw;
-
         target_ue->restart_counter = rsp->recovery.u8;
         target_ue->restart_counter_known = true;
-
-        if (sgw && ogs_gtp2_peer_restart_detected(&sgw->restart_counter,
-                    &sgw->restart_counter_known, rsp->recovery.u8)) {
-            ogs_warn("[%s] SGW restarted (restart counter now %d in "
-                    "Create Session Response)",
-                    mme_ue->imsi_bcd, rsp->recovery.u8);
-            sgw->release_pending = true;
-            ogs_timer_start(mme_self()->t_sgw_release, ogs_time_from_msec(1));
-        }
     }
 
     /********************
