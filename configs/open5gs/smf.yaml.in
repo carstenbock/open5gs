@@ -61,6 +61,8 @@ smf:
 #      enabled: false
 #  ctf:
 #    enabled: auto   # auto(default)|yes|no
+#    exempt_dnn:     # DNNs without online charging (Gy), e.g. the emergency APN
+#      - sos
   freeDiameter: @sysconfdir@/freeDiameter/smf.conf
 
 ################################################################################

@@ -32,6 +32,8 @@ void mme_send_delete_session_or_mme_ue_context_release(
 void mme_send_release_access_bearer_or_ue_context_release(enb_ue_t *enb_ue);
 
 void mme_send_after_paging(mme_ue_t *mme_ue, bool failed);
+void mme_send_release_non_emergency_sessions(mme_ue_t *mme_ue);
+void mme_send_deferred_hss_detach(mme_ue_t *mme_ue);
 
 bool mme_s11_context_lost(uint8_t cause_value, mme_ue_t *mme_ue_from_teid);
 void mme_send_detach_after_sgw_context_loss(

@@ -4762,6 +4762,19 @@ mme_sess_t *mme_sess_find_by_ebi(const mme_ue_t *mme_ue, uint8_t ebi)
     return NULL;
 }
 
+bool mme_ue_has_emergency_sess(const mme_ue_t *mme_ue)
+{
+    mme_sess_t *sess = NULL;
+
+    ogs_assert(mme_ue);
+
+    ogs_list_for_each(&mme_ue->sess_list, sess)
+        if (sess->emergency)
+            return true;
+
+    return false;
+}
+
 mme_sess_t *mme_sess_find_by_apn(const mme_ue_t *mme_ue, const char *apn)
 {
     mme_sess_t *sess = NULL;

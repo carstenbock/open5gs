@@ -509,6 +509,9 @@ void mme_state_operational(ogs_fsm_t *s, mme_event_t *e)
             MME_SESS_CLEAR(sess);
         }
 
+        if (mme_ue->hss_detach_deferred && !mme_ue_has_emergency_sess(mme_ue))
+            mme_send_deferred_hss_detach(mme_ue);
+
         ogs_pkbuf_free(pkbuf);
         break;
 

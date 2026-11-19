@@ -137,6 +137,96 @@ void mme_send_delete_session_or_detach(enb_ue_t *enb_ue, mme_ue_t *mme_ue)
     }
 }
 
+/*
+ * Releases every PDN connection of a connected UE except the one for
+ * emergency bearer services, like a PDN disconnection the UE asked for.
+ */
+void mme_send_release_non_emergency_sessions(mme_ue_t *mme_ue)
+{
+    int r;
+    enb_ue_t *enb_ue = NULL;
+    sgw_ue_t *sgw_ue = NULL;
+    mme_sess_t *sess = NULL;
+
+    ogs_assert(mme_ue);
+
+    enb_ue = enb_ue_find_by_id(mme_ue->enb_ue_id);
+    if (!enb_ue) {
+        ogs_error("ENB-S1 Context has already been removed");
+        return;
+    }
+    sgw_ue = sgw_ue_find_by_id(mme_ue->sgw_ue_id);
+
+    ogs_list_for_each(&mme_ue->sess_list, sess) {
+        mme_bearer_t *bearer = mme_default_bearer_in_sess(sess);
+
+        if (sess->emergency || !bearer ||
+            !OGS_FSM_CHECK(&bearer->sm, esm_state_active))
+            continue;
+
+        ogs_info("[%s] Release of PDN connection [%s], emergency only",
+                mme_ue->imsi_bcd,
+                sess->session ? sess->session->name : "Unknown");
+
+        /* Initiated by the network: no procedure transaction */
+        sess->pti = OGS_NAS_PROCEDURE_TRANSACTION_IDENTITY_UNASSIGNED;
+
+        if (MME_HAVE_SGW_S1U_PATH(sess) && sgw_ue) {
+            ogs_assert(OGS_OK ==
+                mme_gtp_send_delete_session_request(enb_ue, sgw_ue, sess,
+                    OGS_GTP_DELETE_SEND_DEACTIVATE_BEARER_CONTEXT_REQUEST));
+        } else {
+            r = nas_eps_send_deactivate_bearer_context_request(bearer);
+            ogs_expect(r == OGS_OK);
+            ogs_assert(r != OGS_ERROR);
+        }
+        OGS_FSM_TRAN(&bearer->sm, esm_state_pdn_will_disconnect);
+    }
+}
+
+/*
+ * Runs the HSS-initiated detach that was deferred for a PDN connection for
+ * emergency bearer services. The caller has checked that it is gone.
+ */
+void mme_send_deferred_hss_detach(mme_ue_t *mme_ue)
+{
+    int r;
+
+    ogs_assert(mme_ue);
+    ogs_assert(mme_ue->hss_detach_deferred);
+
+    ogs_info("[%s] Emergency PDN connection released: deferred HSS detach",
+            mme_ue->imsi_bcd);
+
+    memset(&mme_ue->nas_eps.detach, 0, sizeof(ogs_nas_detach_type_t));
+    mme_ue->nas_eps.detach.value = mme_ue->hss_detach_deferred;
+    mme_ue->nas_eps.type = MME_EPS_TYPE_DETACH_REQUEST_TO_UE;
+    mme_ue->detach_type = MME_DETACH_TYPE_HSS_EXPLICIT;
+    mme_ue->hss_detach_deferred = 0;
+
+    if (ECM_IDLE(mme_ue)) {
+        MME_STORE_PAGING_INFO(mme_ue, MME_PAGING_TYPE_DETACH_TO_UE, NULL);
+        r = s1ap_send_paging(mme_ue, S1AP_CNDomain_ps);
+        ogs_expect(r == OGS_OK);
+        ogs_assert(r != OGS_ERROR);
+        return;
+    }
+
+    MME_CLEAR_PAGING_INFO(mme_ue);
+    r = nas_eps_send_detach_request(mme_ue);
+    ogs_expect(r == OGS_OK);
+    ogs_assert(r != OGS_ERROR);
+    if (MME_CURRENT_P_TMSI_IS_AVAILABLE(mme_ue)) {
+        ogs_assert(OGS_OK == sgsap_send_detach_indication(mme_ue));
+    } else {
+        enb_ue_t *enb_ue = enb_ue_find_by_id(mme_ue->enb_ue_id);
+        if (enb_ue)
+            mme_send_delete_session_or_detach(enb_ue, mme_ue);
+        else
+            ogs_error("ENB-S1 Context has already been removed");
+    }
+}
+
 void mme_send_delete_session_or_mme_ue_context_release(
         enb_ue_t *enb_ue, mme_ue_t *mme_ue)
 {
@@ -317,6 +407,13 @@ void mme_send_after_paging(mme_ue_t *mme_ue, bool failed)
         if (failed == true) {
             /* Nothing */
             ogs_warn("MME-initiated Detach cannot be invoked");
+        } else if (mme_ue->hss_detach_deferred) {
+            /* Paged for a subscription withdrawal while the UE had an
+             * emergency PDN connection (TS 24.301 5.5.2.3.1) */
+            if (mme_ue_has_emergency_sess(mme_ue))
+                mme_send_release_non_emergency_sessions(mme_ue);
+            else
+                mme_send_deferred_hss_detach(mme_ue);
         } else {
             r = nas_eps_send_detach_request(mme_ue);
             ogs_expect(r == OGS_OK);

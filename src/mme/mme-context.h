@@ -607,6 +607,16 @@ struct mme_ue_s {
      */
     bool            subscription_withdrawn;
 
+    /*
+     * The HSS withdrew the subscription while the UE had a PDN connection
+     * for emergency bearer services. TS 24.301 5.5.2.3.1: the MME does not
+     * send a Detach Request then, it releases the other PDN connections.
+     * Holds the detach type (OGS_NAS_DETACH_TYPE_TO_UE_*) for the detach
+     * that follows once the emergency PDN connection is gone; 0 if no
+     * detach is deferred.
+     */
+    uint8_t         hss_detach_deferred;
+
     /* Authentication synch failure counter */
     uint8_t auth_synch_fail_count;
 
@@ -1337,6 +1347,7 @@ mme_sess_t *mme_sess_find_by_id(ogs_pool_id_t id);
 mme_sess_t *mme_sess_first(const mme_ue_t *mme_ue);
 mme_sess_t *mme_sess_next(mme_sess_t *sess);
 unsigned int mme_sess_count(const mme_ue_t *mme_ue);
+bool mme_ue_has_emergency_sess(const mme_ue_t *mme_ue);
 
 mme_bearer_t *mme_bearer_add(mme_sess_t *sess);
 void mme_bearer_remove(mme_bearer_t *bearer);

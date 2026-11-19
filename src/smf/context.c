@@ -67,6 +67,20 @@ int smf_use_gy_iface(void)
     }
 }
 
+bool smf_ctf_dnn_is_exempt(const char *dnn)
+{
+    int i;
+
+    if (!dnn)
+        return false;
+
+    for (i = 0; i < smf_self()->ctf_config.num_of_exempt_dnn; i++)
+        if (!ogs_strcasecmp(smf_self()->ctf_config.exempt_dnn[i], dnn))
+            return true;
+
+    return false;
+}
+
 void smf_context_init(void)
 {
     ogs_assert(context_initialized == 0);
@@ -638,6 +652,33 @@ int smf_context_parse_config(void)
                             else
                                 ogs_warn("unknown 'failure_handling' value `%s`",
                                         fh ? fh : "");
+                        } else if (!strcmp(ctf_key, "exempt_dnn")) {
+                            ogs_yaml_iter_t dnn_iter;
+                            ogs_yaml_iter_recurse(&ctf_iter, &dnn_iter);
+                            ogs_assert(ogs_yaml_iter_type(&dnn_iter) !=
+                                YAML_MAPPING_NODE);
+
+                            do {
+                                const char *v = NULL;
+
+                                if (ogs_yaml_iter_type(&dnn_iter) ==
+                                        YAML_SEQUENCE_NODE) {
+                                    if (!ogs_yaml_iter_next(&dnn_iter))
+                                        break;
+                                }
+
+                                v = ogs_yaml_iter_value(&dnn_iter);
+                                if (!v || !strlen(v))
+                                    continue;
+                                if (self.ctf_config.num_of_exempt_dnn >=
+                                        SMF_MAX_NUM_OF_CTF_EXEMPT_DNN) {
+                                    ogs_warn("Ignore exempt_dnn : %s", v);
+                                    continue;
+                                }
+                                self.ctf_config.exempt_dnn[
+                                    self.ctf_config.num_of_exempt_dnn++] = v;
+                            } while (ogs_yaml_iter_type(&dnn_iter) ==
+                                        YAML_SEQUENCE_NODE);
                         } else
                             ogs_warn("unknown key `%s`", ctf_key);
                     }

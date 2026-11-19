@@ -107,6 +107,32 @@ int esm_handle_pdn_connectivity_request(
         ogs_warn("Emergency call, but no emergency APN defined");
         return OGS_ERROR;
     }
+    if (emergency && create_action != OGS_GTP_CREATE_IN_ATTACH_REQUEST &&
+        mme_ue_has_emergency_sess(mme_ue)) {
+        /* TS 24.301 6.5.1.7 a): one PDN connection for emergency bearer
+         * services per UE. sess->emergency of this request is not set yet,
+         * so a hit is another PDN connection. Not checked in an attach,
+         * which replaces the PDN connections of the previous one. */
+        r = nas_eps_send_pdn_connectivity_reject(sess,
+                OGS_NAS_ESM_CAUSE_MULTIPLE_PDN_CONNECTIONS_FOR_A_GIVEN_APN_NOT_ALLOWED,
+                create_action);
+        ogs_expect(r == OGS_OK);
+        ogs_assert(r != OGS_ERROR);
+        ogs_warn("[%s] Emergency PDN connection already exists",
+                mme_ue->imsi_bcd);
+        return OGS_ERROR;
+    }
+    if (!emergency && mme_ue->hss_detach_deferred) {
+        /* The subscription is withdrawn and the UE is only kept for its
+         * emergency PDN connection (TS 24.301 5.5.2.3.1) */
+        r = nas_eps_send_pdn_connectivity_reject(sess,
+                OGS_NAS_ESM_CAUSE_REQUEST_REJECTED_UNSPECIFIED, create_action);
+        ogs_expect(r == OGS_OK);
+        ogs_assert(r != OGS_ERROR);
+        ogs_warn("[%s] Subscription withdrawn: only emergency bearer services",
+                mme_ue->imsi_bcd);
+        return OGS_ERROR;
+    }
     if ((req->presencemask &
             OGS_NAS_EPS_PDN_CONNECTIVITY_REQUEST_ACCESS_POINT_NAME_PRESENT) ||
         emergency) {

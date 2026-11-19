@@ -98,6 +98,7 @@ uint8_t mme_s6a_handle_ula(
 
     /* KI-153: new subscription data from the HSS */
     mme_ue->subscription_withdrawn = false;
+    mme_ue->hss_detach_deferred = 0;
 
     memcpy(&mme_ue->ambr, &subscription_data->ambr, sizeof(ogs_bitrate_t));
 
@@ -270,6 +271,40 @@ void mme_s6a_handle_clr(mme_ue_t *mme_ue, ogs_diam_s6a_message_t *s6a_message)
         mme_ue->nas_eps.type == MME_EPS_TYPE_DETACH_REQUEST_TO_UE) {
         ogs_warn("[%s] HSS detach already in progress: CLR ignored",
                 mme_ue->imsi_bcd);
+        return;
+    }
+
+    /*
+     * TS 24.301 5.5.2.3.1, TS 23.401 5.3.8.4: a UE with a PDN connection for
+     * emergency bearer services is not detached. The other PDN connections
+     * are released, and the detach follows when the emergency PDN connection
+     * is gone.
+     */
+    if (clr_message->cancellation_type ==
+            OGS_DIAM_S6A_CT_SUBSCRIPTION_WITHDRAWAL &&
+        mme_ue_has_emergency_sess(mme_ue)) {
+        if (mme_ue->hss_detach_deferred) {
+            ogs_warn("[%s] HSS detach already deferred: CLR ignored",
+                    mme_ue->imsi_bcd);
+            return;
+        }
+        ogs_warn("[%s] Subscription withdrawn during emergency bearer "
+                "services: detach deferred", mme_ue->imsi_bcd);
+        mme_ue->hss_detach_deferred =
+            (clr_message->clr_flags & OGS_DIAM_S6A_CLR_FLAGS_REATTACH_REQUIRED) ?
+                OGS_NAS_DETACH_TYPE_TO_UE_RE_ATTACH_REQUIRED :
+                OGS_NAS_DETACH_TYPE_TO_UE_RE_ATTACH_NOT_REQUIRED;
+        mme_ue->subscription_withdrawn = true;
+
+        if (ECM_IDLE(mme_ue)) {
+            MME_STORE_PAGING_INFO(mme_ue,
+                MME_PAGING_TYPE_DETACH_TO_UE, NULL);
+            r = s1ap_send_paging(mme_ue, S1AP_CNDomain_ps);
+            ogs_expect(r == OGS_OK);
+            ogs_assert(r != OGS_ERROR);
+        } else {
+            mme_send_release_non_emergency_sessions(mme_ue);
+        }
         return;
     }
 

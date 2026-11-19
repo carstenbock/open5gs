@@ -70,9 +70,16 @@ typedef struct smf_ctf_config_s {
     /* What to do when the OCS cannot be reached; a CCFH AVP the OCS sends
      * in the CCA overrides it for that session. */
     smf_ctf_failure_handling_e failure_handling;
+    /* DNNs whose sessions never use Gy, whatever 'enabled' says. Meant for
+     * the emergency APN: an emergency PDN connection must not depend on the
+     * OCS or on the subscriber's credit. */
+#define SMF_MAX_NUM_OF_CTF_EXEMPT_DNN 8
+    const char *exempt_dnn[SMF_MAX_NUM_OF_CTF_EXEMPT_DNN];
+    int num_of_exempt_dnn;
 } smf_ctf_config_t;
 
 int smf_ctf_config_init(smf_ctf_config_t *ctf_config);
+bool smf_ctf_dnn_is_exempt(const char *dnn);
 
 typedef struct smf_nsmf_pdusession_param_s {
     OpenAPI_request_indication_e request_indication;

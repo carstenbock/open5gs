@@ -149,6 +149,12 @@ static bool send_ccr_init_req_gx_gy(smf_sess_t *sess, ogs_gtp_xact_t *gtp_xact)
         smf_self()->ctf_config.failure_handling;
     sess->sm_data.gy_retried = false;
 
+    if (use_gy != 0 && smf_ctf_dnn_is_exempt(sess->session.name)) {
+        ogs_info("[%s] No online charging for DNN (ctf.exempt_dnn)",
+                sess->session.name);
+        use_gy = 0;
+    }
+
     if (use_gy == -1) {
         if (sess->sm_data.gy_failure_handling ==
                 SMF_CTF_FAILURE_HANDLING_CONTINUE) {
