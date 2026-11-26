@@ -49,6 +49,13 @@ bool ausf_nausf_auth_handle_authenticate(ausf_ue_t *ausf_ue,
                 recvmsg, "No servingNetworkName", ausf_ue->suci, NULL));
         return false;
     }
+    if (!serving_network_name[0]) {
+        ogs_error("[%s] Empty servingNetworkName", ausf_ue->suci);
+        ogs_assert(true ==
+            ogs_sbi_server_send_error(stream, OGS_SBI_HTTP_STATUS_BAD_REQUEST,
+                recvmsg, "Empty servingNetworkName", ausf_ue->suci, NULL));
+        return false;
+    }
 
     if (ausf_ue->serving_network_name)
         ogs_free(ausf_ue->serving_network_name);
@@ -58,9 +65,10 @@ bool ausf_nausf_auth_handle_authenticate(ausf_ue_t *ausf_ue,
     r = ausf_sbi_discover_and_send(
             OpenAPI_service_name_nudm_ueau, NULL,
             ausf_nudm_ueau_build_get,
-            ausf_ue, stream, AuthenticationInfo->resynchronization_info);
+            ausf_ue, stream, 0, AuthenticationInfo->resynchronization_info);
     ogs_expect(r == OGS_OK);
-    ogs_assert(r != OGS_ERROR);
+    if (r != OGS_OK)
+        return false;
 
     return true;
 }
@@ -70,7 +78,7 @@ bool ausf_nausf_auth_handle_authenticate_confirmation(ausf_ue_t *ausf_ue,
 {
     OpenAPI_confirmation_data_t *ConfirmationData = NULL;
     char *res_star_string = NULL;
-    uint8_t res_star[OGS_KEYSTRLEN(OGS_MAX_RES_LEN)];
+    uint8_t res_star[OGS_MAX_RES_LEN];
     int r;
 
     ogs_assert(ausf_ue);
@@ -87,18 +95,20 @@ bool ausf_nausf_auth_handle_authenticate_confirmation(ausf_ue_t *ausf_ue,
     }
 
     res_star_string = ConfirmationData->res_star;
-    if (!res_star_string) {
-        ogs_error("[%s] No ConfirmationData.resStar", ausf_ue->suci);
+    /* TS 29.509 5.2.2.2.2: null reports a 5G-AKA failure at the AMF. */
+    if (res_star_string && ogs_hex_from_string_checked(
+                res_star_string, res_star, sizeof(res_star)) != OGS_OK) {
+        ogs_error("[%s] Invalid ConfirmationData.resStar", ausf_ue->suci);
         ogs_assert(true ==
             ogs_sbi_server_send_error(stream, OGS_SBI_HTTP_STATUS_BAD_REQUEST,
-                recvmsg, "No ConfirmationData.resStar", ausf_ue->suci, NULL));
+                recvmsg, "Invalid ConfirmationData.resStar", ausf_ue->suci,
+                NULL));
         return false;
     }
 
-    ogs_ascii_to_hex(res_star_string, strlen(res_star_string),
-            res_star, sizeof(res_star));
-
-    if (memcmp(res_star, ausf_ue->xres_star, OGS_MAX_RES_LEN) != 0) {
+    if (!res_star_string) {
+        ausf_ue->auth_result = OpenAPI_auth_result_AUTHENTICATION_FAILURE;
+    } else if (memcmp(res_star, ausf_ue->xres_star, sizeof(res_star)) != 0) {
         ogs_log_hexdump(OGS_LOG_WARN, res_star, OGS_MAX_RES_LEN);
         ogs_log_hexdump(OGS_LOG_WARN, ausf_ue->xres_star, OGS_MAX_RES_LEN);
 
@@ -110,9 +120,10 @@ bool ausf_nausf_auth_handle_authenticate_confirmation(ausf_ue_t *ausf_ue,
     r = ausf_sbi_discover_and_send(
             OpenAPI_service_name_nudm_ueau, NULL,
             ausf_nudm_ueau_build_result_confirmation_inform,
-            ausf_ue, stream, NULL);
+            ausf_ue, stream, ausf_ue->auth_result, NULL);
     ogs_expect(r == OGS_OK);
-    ogs_assert(r != OGS_ERROR);
+    if (r != OGS_OK)
+        return false;
 
     return true;
 }
@@ -126,12 +137,23 @@ bool ausf_nausf_auth_handle_authenticate_delete(ausf_ue_t *ausf_ue,
     ogs_assert(stream);
     ogs_assert(recvmsg);
 
+    if (!ausf_ue->auth_event.resource_uri) {
+        ogs_error("[%s] No authentication event", ausf_ue->supi);
+        ogs_assert(true ==
+            ogs_sbi_server_send_error(
+                stream, OGS_SBI_HTTP_STATUS_NOT_FOUND,
+                recvmsg, "Authentication event not found",
+                ausf_ue->supi, NULL));
+        return true;
+    }
+
     r = ausf_sbi_discover_and_send(
             OpenAPI_service_name_nudm_ueau, NULL,
             ausf_nudm_ueau_build_auth_removal_ind,
-            ausf_ue, stream, NULL);
+            ausf_ue, stream, 0, NULL);
     ogs_expect(r == OGS_OK);
-    ogs_assert(r != OGS_ERROR);
+    if (r != OGS_OK)
+        return false;
 
     return true;
 }

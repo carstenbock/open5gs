@@ -20,7 +20,7 @@
 #include "sbi-path.h"
 #include "pfcp-path.h"
 #include "local-path.h"
-
+#include "gtp-path.h"
 #include "n4-handler.h"
 
 static void pfcp_restoration(ogs_pfcp_node_t *node);
@@ -228,6 +228,26 @@ void smf_pfcp_state_associated(ogs_fsm_t *s, smf_event_t *e)
              * locally stored in xact when sending the original request: */
             sess = smf_sess_find_by_seid(xact->local_seid);
         }
+        /*
+         * A session belongs to the PFCP node it was established with.
+         * A request for that SEID from any other node is treated
+         * as if the session did not exist, so the handlers reply
+         * with Session context not found (Cause 65).
+         */
+        if (sess && sess->pfcp_node != node) {
+            ogs_error("PFCP-Node mismatch: SMF-SEID[0x%lx] type [%d] from %s",
+                    (long)message->h.seid, message->h.type,
+                    ogs_sockaddr_to_string_static(node->addr_list));
+            if (sess->pfcp_node)
+                ogs_error("    owner %s",
+                        ogs_sockaddr_to_string_static(
+                            sess->pfcp_node->addr_list));
+            sess = NULL;
+        }
+        /* Replacement responses are consumed before node dispatch. Other
+         * messages for the retiring session follow the no-context path. */
+        if (sess && sess->replacement_create)
+            sess = NULL;
         if (sess)
             e->sess_id = sess->id;
 
@@ -467,6 +487,25 @@ static void pfcp_restoration(ogs_pfcp_node_t *node)
             ogs_assert(sess);
 
             if (node == sess->pfcp_node) {
+                /*
+                 * Restore only operational sessions after a UPF restart.
+                 *
+                 * Sessions still being established are not yet ready for
+                 * restoration. Sessions being released may be cleared
+                 * without a subsequent PFCP Session Deletion, leaving
+                 * stale PFCP state with the old UE IP in the restarted UPF
+                 * if they are restored here.
+                 */
+                if (!OGS_FSM_CHECK(&sess->sm, smf_gsm_state_operational)) {
+                    if (sess->epc)
+                        ogs_warn("[%s:%s] Skip restoration: not operational",
+                                smf_ue->imsi_bcd, sess->session.name);
+                    else
+                        ogs_warn("[%s:%d] Skip restoration: not operational",
+                                smf_ue->supi, sess->psi);
+                    continue;
+                }
+
                 if (sess->epc) {
                     ogs_info("UE IMSI[%s] APN[%s] IPv4[%s] IPv6[%s]",
                         smf_ue->imsi_bcd, sess->session.name,
@@ -514,10 +553,8 @@ static void reselect_upf(ogs_pfcp_node_t *node)
             break;
     }
 
-    if (iter == NULL) {
-        ogs_error("No UPF available");
-        return;
-    }
+    if (iter == NULL)
+        ogs_warn("No UPF available");
 
     ogs_list_for_each(&smf_self()->smf_ue_list, smf_ue) {
         smf_sess_t *sess = NULL, *next_sess = NULL;
@@ -525,26 +562,45 @@ static void reselect_upf(ogs_pfcp_node_t *node)
         ogs_list_for_each_safe(&smf_ue->sess_list, next_sess, sess) {
 
             if (node == sess->pfcp_node) {
-                if (sess->epc && sess->gtp.version == 2) {
-                    /*
-                     * KI-119(a): the UPF holding this PDN connection is
-                     * gone, so is its user plane. Release the PDN connection
-                     * like the shutdown drain does: Delete Bearer Request
-                     * for the default bearer with "reactivation requested",
-                     * so that the UE sets it up again (on a live UPF). The
-                     * PFCP Session Deletion that follows goes to the UPF
-                     * that is still associated; its "Session context not
-                     * found" answer ends the release like a success.
-                     */
-                    ogs_warn("[%s:%s] UPF lost: releasing the PDN connection",
+                if (sess->epc) {
+                    smf_bearer_t *linked_bearer = NULL;
+
+                    if (!OGS_FSM_CHECK(&sess->sm,
+                            smf_gsm_state_operational)) {
+                        ogs_info("[%s:%s] Skip EPC session release: "
+                                "not operational",
+                                smf_ue->imsi_bcd, sess->session.name);
+                        continue;
+                    }
+
+                    if (iter) {
+                        ogs_error("[%s:%s] EPC sess restoration is not implemented, releasing bearer",
                             smf_ue->imsi_bcd, sess->session.name);
-                    sess->pfcp_node = iter;
-                    smf_trigger_session_release(
-                            sess, NULL, OGS_PFCP_DELETE_TRIGGER_SMF_INITIATED);
-                } else if (sess->epc) {
-                    ogs_error("[%s:%s] EPC restoration is not implemented",
+                    }
+                    linked_bearer = smf_default_bearer_in_sess(sess);
+                    ogs_assert(linked_bearer);
+                    switch (sess->gtp.version) {
+                    case 1:
+                        /* smf_gtp1_send_delete_pdp_context_request(
+                            sess,
+                            OGS_GTP1_CAUSE_REACTIACTION_REQUESTED,
+                            teardown_ind = true); */
+                        ogs_error(
+                            "[%s:%s] Tx GTPv1C Delete PDP Context Request (cause=Reactivation Requested, teardown_ind=1) not implemented!",
                             smf_ue->imsi_bcd, sess->session.name);
+                        break;
+                    case 2:
+                        smf_gtp2_send_delete_bearer_request(
+                            linked_bearer,
+                            OGS_NAS_PROCEDURE_TRANSACTION_IDENTITY_UNASSIGNED,
+                            OGS_GTP2_CAUSE_REACTIVATION_REQUESTED);
+                        break;
+                    }
                 } else {
+                    if (iter) {
+                        ogs_error("[%s:%s] AMF sess restoration is not implemented, releasing session",
+                            smf_ue->imsi_bcd, sess->session.name);
+                    }
                     smf_trigger_session_release(
                             sess, NULL,
                             OGS_PFCP_DELETE_TRIGGER_SMF_INITIATED);
@@ -573,7 +629,8 @@ static void node_timeout(ogs_pfcp_xact_t *xact, void *data)
 
         rv = ogs_queue_push(ogs_app()->queue, e);
         if (rv != OGS_OK) {
-            ogs_error("ogs_queue_push() failed:%d", (int)rv);
+            if (rv != OGS_DONE)
+                ogs_error("ogs_queue_push() failed:%d", (int)rv);
             ogs_event_free(e);
         }
         break;

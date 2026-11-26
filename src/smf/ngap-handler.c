@@ -222,6 +222,12 @@ int ngap_handle_pdu_session_resource_setup_response_transfer(
         goto cleanup;
     }
 
+    /* A network-triggered Service Request can restore the user plane
+     * without an ACTIVATING update from the AMF. */
+    if (num_of_qos_flow_modified &&
+        sess->up_cnx_state == OpenAPI_up_cnx_state_DEACTIVATED)
+        sess->up_cnx_state = OpenAPI_up_cnx_state_ACTIVATED;
+
     if (far_update) {
         uint64_t pfcp_flags = OGS_PFCP_MODIFY_DL_ONLY|OGS_PFCP_MODIFY_ACTIVATE;
 
@@ -363,6 +369,8 @@ int ngap_handle_pdu_session_resource_setup_unsuccessful_transfer(
         ogs_error("    Cause[Group:%d Cause:%d]",
                 Cause->present, (int)Cause->choice.radioNetwork);
     }
+
+    sess->up_cnx_state = OpenAPI_up_cnx_state_DEACTIVATED;
 
     if (HOME_ROUTED_ROAMING_IN_VSMF(sess)) {
     /*
@@ -525,6 +533,14 @@ int ngap_handle_pdu_session_resource_modify_response_transfer(
                 qos_flow = smf_qos_flow_find_by_qfi(sess,
                         qosFlowAddOrModifyResponseItem->qosFlowIdentifier);
                 if (qos_flow) {
+                    /* Adding the same node twice makes the list circular */
+                    if (ogs_list_exists(&sess->qos_flow_to_modify_list,
+                                &qos_flow->to_modify_node)) {
+                        ogs_error("[%s:%d] Duplicate QFI [%d]",
+                                smf_ue->supi, sess->psi, qos_flow->qfi);
+                        continue;
+                    }
+
                     dl_far = qos_flow->dl_far;
                     ogs_assert(dl_far);
 
@@ -795,9 +811,6 @@ int ngap_handle_handover_required_transfer(
 
     NGAP_HandoverRequiredTransfer_t message;
 
-    NGAP_DirectForwardingPathAvailability_t
-        *directForwardingPathAvailability = NULL;
-
     ogs_pkbuf_t *n2smbuf = NULL;
 
     ogs_assert(pkbuf);
@@ -820,9 +833,26 @@ int ngap_handle_handover_required_transfer(
         goto cleanup;
     }
 
-    directForwardingPathAvailability = message.directForwardingPathAvailability;
-    if (!directForwardingPathAvailability)
-        sess->handover.data_forwarding_not_possible = true;
+    /*
+     * Always re-evaluate per HO prep: the flag must not carry state from a
+     * previous handover.
+     *
+     * The optional directForwardingPathAvailability IE states that a direct
+     * path between source and target exists. Its absence is the normal
+     * trigger for indirect forwarding through the UPF, not a statement that
+     * forwarding is impossible, so it must not raise DataForwardingNotPossible
+     * towards the target: that stops the target allocating a forwarding tunnel
+     * and loses everything the source had buffered for the UE.
+     *
+     * What this SMF builds is indirect forwarding either way, since the tunnel
+     * it hands the source is the UPF's, so forwarding is offered whichever way
+     * the IE reads. A target that cannot accept it still says so by answering
+     * without dataForwardingAccepted.
+     */
+    ogs_debug("    Direct forwarding path [%s]",
+            message.directForwardingPathAvailability ?
+                "available" : "not offered");
+    sess->handover.data_forwarding_not_possible = false;
 
     n2smbuf = ngap_build_pdu_session_resource_setup_request_transfer(sess);
     ogs_assert(n2smbuf);
@@ -923,10 +953,13 @@ int ngap_handle_handover_request_ack(
                 "Invalid GTP Tunnel IP (IPv4/IPv6 all zero)", smf_ue->supi);
         goto cleanup;
     }
-    memcpy(&sess->handover.remote_dl_ip, &remote_dl_ip,
-            sizeof(sess->handover.remote_dl_ip));
+    /* The tunnel the target serves the UE on once the handover completes.
+     * It is kept apart from the indirect forwarding tunnel below, which is
+     * optional and would otherwise overwrite it. */
+    memcpy(&sess->handover.gnb_n3_ip, &remote_dl_ip,
+            sizeof(sess->handover.gnb_n3_ip));
     ogs_asn_OCTET_STRING_to_uint32(&gTPTunnel->gTP_TEID,
-            &sess->handover.remote_dl_teid);
+            &sess->handover.gnb_n3_teid);
 
     if (HOME_ROUTED_ROAMING_IN_VSMF(sess)) {
         ogs_list_for_each(&sess->bearer_list, qos_flow) {
@@ -1010,33 +1043,69 @@ int ngap_handle_handover_request_ack(
                 &sess->handover.remote_dl_teid);
 
         sess->handover.indirect_data_forwarding = true;
+    } else {
+        sess->handover.indirect_data_forwarding = false;
     }
 
     sess->handover.prepared = true;
 
     if (sess->handover.indirect_data_forwarding == true) {
         if (smf_sess_have_indirect_data_forwarding(sess) == true) {
+            ogs_pfcp_xact_t *xact = NULL;
+            ogs_pool_id_t xact_id = sess->handover.indirect_remove_xact_id;
+
+            /*
+             * The tunnel of the previous handover is still here because
+             * its REMOVE is delayed by handover.duration after completion.
+             * Indirect tunnel PDR/FARs are only identified by
+             * ACCESS -> ACCESS, so it has to go before the new one is
+             * created: REMOVE now, then CREATE after the PFCP response
+             * (smf_5gc_n4_handle_session_modification_response).
+             */
             ogs_error("We found redundant INDIRECT Tunnel");
             ogs_error("It will be automatically removed");
 
-            ogs_assert(OGS_OK ==
-                smf_5gc_pfcp_send_all_pdr_modification_request(
-                    sess, stream,
-                    OGS_PFCP_MODIFY_INDIRECT|
-                    /*
-                     * Firstly, OGS_PFCP_MODIFY_REMOVE is only appled.
-                     * And then, after receiving PFCP response message,
-                     * we can apply OGS_PFCP_MODIFY_CREATE.
-                     *
-                     * PFCP build is implemented as below.
-                     *
-                     * if OGS_PFCP_MODIFY_REMOVE
-                     * else if OGS_PFCP_MODIFY_CREATE
-                     * else if ..
-                     * ...
-                     */
-                    OGS_PFCP_MODIFY_REMOVE|OGS_PFCP_MODIFY_CREATE,
-                    0, 0));
+            /* Claimed once, whether or not it is still there */
+            sess->handover.indirect_remove_xact_id = OGS_INVALID_POOL_ID;
+            if (xact_id >= OGS_MIN_POOL_ID && xact_id <= OGS_MAX_POOL_ID)
+                xact = ogs_pfcp_xact_find_by_id(xact_id);
+
+            if (xact) {
+                /*
+                 * The delayed REMOVE is still outstanding. Reuse it as
+                 * the first step rather than sending a second REMOVE:
+                 * the response of a second one would arrive after the
+                 * new tunnel was created and delete it from the session,
+                 * and its request could remove a reused PDR ID in the UPF.
+                 * Send it now if it is still waiting for the timer.
+                 */
+                xact->modify_flags |= OGS_PFCP_MODIFY_CREATE;
+                xact->assoc_stream_id = ogs_sbi_id_from_stream(stream);
+
+                if (xact->tm_delayed_commit->running) {
+                    ogs_timer_stop(xact->tm_delayed_commit);
+                    ogs_assert(OGS_OK == ogs_pfcp_xact_commit(xact));
+                }
+            } else {
+                ogs_assert(OGS_OK ==
+                    smf_5gc_pfcp_send_all_pdr_modification_request(
+                        sess, stream,
+                        OGS_PFCP_MODIFY_INDIRECT|
+                        /*
+                         * Firstly, OGS_PFCP_MODIFY_REMOVE is only appled.
+                         * And then, after receiving PFCP response message,
+                         * we can apply OGS_PFCP_MODIFY_CREATE.
+                         *
+                         * PFCP build is implemented as below.
+                         *
+                         * if OGS_PFCP_MODIFY_REMOVE
+                         * else if OGS_PFCP_MODIFY_CREATE
+                         * else if ..
+                         * ...
+                         */
+                        OGS_PFCP_MODIFY_REMOVE|OGS_PFCP_MODIFY_CREATE,
+                        0, 0));
+            }
         } else {
 
             smf_sess_create_indirect_data_forwarding(sess);

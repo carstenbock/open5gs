@@ -54,14 +54,10 @@ static void timer_send_event(int timer_id, void *data)
 
     switch (timer_id) {
     case NRF_TIMER_NF_INSTANCE_NO_HEARTBEAT:
-        e = nrf_event_new(OGS_EVENT_SBI_TIMER);
-        e->h.timer_id = timer_id;
-        e->nf_instance = data;
-        break;
     case NRF_TIMER_SUBSCRIPTION_VALIDITY:
         e = nrf_event_new(OGS_EVENT_SBI_TIMER);
         e->h.timer_id = timer_id;
-        e->subscription_data = data;
+        e->h.sbi.data = data;
         break;
     default:
         ogs_fatal("Unknown timer id[%d]", timer_id);
@@ -71,7 +67,8 @@ static void timer_send_event(int timer_id, void *data)
 
     rv = ogs_queue_push(ogs_app()->queue, e);
     if (rv != OGS_OK) {
-        ogs_error("ogs_queue_push() failed:%d", (int)rv);
+        if (rv != OGS_DONE)
+            ogs_error("ogs_queue_push() failed:%d", (int)rv);
         ogs_event_free(e);
     }
 }

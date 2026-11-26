@@ -47,6 +47,8 @@ typedef enum {
 
     AMF_EVENT_5GMM_MESSAGE,
     AMF_EVENT_5GMM_TIMER,
+    AMF_EVENT_5GMM_EIR_FAILURE,
+    AMF_EVENT_5GMM_AUTH_FAILURE_REPORT_TIMEOUT,
     AMF_EVENT_5GSM_MESSAGE,
     AMF_EVENT_5GSM_TIMER,
 
@@ -71,6 +73,7 @@ typedef struct amf_event_s {
 
     struct {
         uint8_t type;
+        int mac_failed;
         ogs_nas_5gs_message_t *message;
     } nas;
 

@@ -317,6 +317,16 @@ typedef struct smf_bearer_s {
     uint8_t         qfi;            /* 5G Core QFI */
     uint8_t         ebi;            /* EPC EBI */
 
+    /*
+     * Set while a GTP-U Error Indication is being handled for this bearer,
+     * so that repeated Error Indications do not start a second deactivation.
+     * Cleared when the procedure cannot go on - the PFCP deactivation or the
+     * final removal is rejected or times out.  Otherwise the procedure ends
+     * by removing the bearer or the whole PDN connection, which drops the
+     * mark with the context.
+     */
+    bool            ei_deactivation;
+
     uint32_t        pgw_s5u_teid;   /* PGW-S5U TEID */
     ogs_sockaddr_t  *pgw_s5u_addr;  /* PGW-S5U IPv4 */
     ogs_sockaddr_t  *pgw_s5u_addr6; /* PGW-S5U IPv6 */
@@ -355,6 +365,10 @@ typedef struct smf_sess_s {
 
     ogs_fsm_t       sm;             /* A state machine */
     struct {
+        bool epc_auth_aborted; /* GTP transaction lost; drain pending answers */
+        bool gx_session_created; /* Successful Gx Initial answer */
+        bool gy_session_created; /* Outer Gy success, including MSCC failure */
+        bool s6b_session_created; /* Successful S6b AAA */
         bool gx_ccr_init_in_flight; /* Waiting for Gx CCA */
         uint32_t gx_cca_init_err; /* Gx CCA RXed error code */
         bool gy_ccr_init_in_flight; /* Waiting for Gy CCA */
@@ -426,6 +440,7 @@ typedef struct smf_sess_s {
     uint8_t         pti; /* 5GS-NAS : Procedure transaction identity */
     uint8_t         request_type;   /* Request type */
 
+    ogs_event_t     *replacement_create; /* Create waiting for N4 deletion */
     char            *sm_context_ref; /* smContextRef */
     char            *sm_context_status_uri; /* SmContextStatusNotification */
     struct {
@@ -722,6 +737,15 @@ typedef struct smf_sess_s {
         bool data_forwarding_not_possible;
         bool indirect_data_forwarding;
 
+        /*
+         * Delayed PFCP REMOVE of the indirect tunnel after handover
+         * completion. The next handover reuses it as the first step of
+         * replacing the tunnel (ngap_handle_handover_request_ack).
+         * Cleared when that transaction is claimed, answered or timed out,
+         * so it never refers to a transaction that no longer exists.
+         */
+        ogs_pool_id_t indirect_remove_xact_id;
+
         /* NG-U UP Transport Information Saved Temporally */
         uint32_t gnb_n3_teid;
         ogs_ip_t gnb_n3_ip;
@@ -837,6 +861,7 @@ uint8_t smf_sess_set_ue_ip(smf_sess_t *sess);
 void smf_sess_set_paging_n1n2message_location(
         smf_sess_t *sess, char *n1n2message_location);
 
+void smf_sess_finish_replacement(smf_sess_t *sess);
 void smf_sess_remove(smf_sess_t *sess);
 void smf_sess_remove_all(smf_ue_t *smf_ue);
 
@@ -902,8 +927,8 @@ smf_pf_t *smf_pf_find_by_flow(
 smf_pf_t *smf_pf_first(smf_bearer_t *bearer);
 smf_pf_t *smf_pf_next(smf_pf_t *pf);
 
-int smf_pco_build(smf_sess_t *sess,
-        uint8_t *pco_buf, uint8_t *buffer, int length);
+int smf_pco_build(smf_sess_t *sess, uint8_t *pco_buf, int pco_buf_len,
+        uint8_t *buffer, int length);
 
 void smf_qfi_pool_init(smf_sess_t *sess);
 void smf_qfi_pool_final(smf_sess_t *sess);

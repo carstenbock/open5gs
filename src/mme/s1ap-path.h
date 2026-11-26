@@ -46,11 +46,12 @@ int s1ap_send_to_nas(enb_ue_t *enb_ue,
         S1AP_ProcedureCode_t procedureCode, S1AP_NAS_PDU_t *nasPdu);
 int s1ap_send_to_esm(
         mme_ue_t *mme_ue, ogs_pkbuf_t *esmbuf,
-        uint8_t nas_type, int create_action);
+        uint8_t nas_type, int mac_failed, int create_action);
 
 int s1ap_send_s1_setup_response(mme_enb_t *enb);
 int s1ap_send_s1_setup_failure(
-        mme_enb_t *enb, S1AP_Cause_PR group, long cause);
+        mme_enb_t *enb, S1AP_Cause_PR group, long cause,
+        S1AP_CriticalityDiagnostics_t *CriticalityDiagnostics);
 
 int s1ap_send_enb_configuration_update_ack(mme_enb_t *enb);
 int s1ap_send_enb_configuration_update_failure(
@@ -75,6 +76,10 @@ int s1ap_send_e_rab_modification_confirm(mme_ue_t *mme_ue);
 
 int s1ap_send_path_switch_ack(
         mme_ue_t *mme_ue, bool e_rab_to_switched_in_uplink_list);
+int s1ap_send_path_switch_failure(
+        mme_enb_t *enb,
+        uint32_t enb_ue_s1ap_id, uint32_t mme_ue_s1ap_id,
+        S1AP_Cause_PR group, long cause);
 
 int s1ap_send_handover_command(enb_ue_t *source_ue);
 int s1ap_send_handover_preparation_failure(
@@ -97,6 +102,12 @@ int s1ap_send_error_indication(
         S1AP_MME_UE_S1AP_ID_t *mme_ue_s1ap_id,
         S1AP_ENB_UE_S1AP_ID_t *enb_ue_s1ap_id,
         S1AP_Cause_PR group, long cause);
+int s1ap_send_error_indication_with_diagnostics(
+        mme_enb_t *enb,
+        S1AP_MME_UE_S1AP_ID_t *mme_ue_s1ap_id,
+        S1AP_ENB_UE_S1AP_ID_t *enb_ue_s1ap_id,
+        S1AP_Cause_PR group, long cause,
+        S1AP_CriticalityDiagnostics_t *CriticalityDiagnostics);
 int s1ap_send_error_indication1(
         enb_ue_t *enb_ue, S1AP_Cause_PR group, long cause);
 int s1ap_send_error_indication2(

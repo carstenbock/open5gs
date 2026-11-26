@@ -109,6 +109,7 @@ static void pcf_qos_profile_clear(void)
 static int pcf_context_prepare(void)
 {
     pcf_qos_profile_clear();
+    memset(self.arp_priority_level, 0, sizeof(self.arp_priority_level));
     return OGS_OK;
 }
 
@@ -386,6 +387,75 @@ next:
     return OGS_OK;
 }
 
+static int parse_reservation_priorities_conf(ogs_yaml_iter_t *parent)
+{
+    ogs_yaml_iter_t array, iter;
+
+    ogs_assert(parent);
+
+    ogs_yaml_iter_recurse(parent, &array);
+    do {
+        const char *res_prio_string = NULL;
+        const char *priority_level_string = NULL;
+        OpenAPI_reserv_priority_e res_prio = OpenAPI_reserv_priority_NULL;
+        char *end = NULL;
+        long priority_level = 0;
+
+        OGS_YAML_ARRAY_NEXT(&array, &iter);
+        while (ogs_yaml_iter_next(&iter)) {
+            const char *key = ogs_yaml_iter_key(&iter);
+            ogs_assert(key);
+
+            if (!strcmp(key, "res_prio")) {
+                res_prio_string = ogs_yaml_iter_value(&iter);
+            } else if (!strcmp(key, "priority_level")) {
+                priority_level_string = ogs_yaml_iter_value(&iter);
+            } else {
+                ogs_warn("unknown reservation_priorities key `%s`", key);
+            }
+        }
+
+        if (!res_prio_string || !res_prio_string[0]) {
+            ogs_warn("Ignore reservation_priorities entry without res_prio");
+            goto next;
+        }
+
+        res_prio = OpenAPI_reserv_priority_FromString((char *)res_prio_string);
+        if (res_prio == OpenAPI_reserv_priority_NULL) {
+            ogs_warn("Ignore reservation_priorities invalid res_prio [%s]",
+                    res_prio_string);
+            goto next;
+        }
+
+        if (!priority_level_string || !priority_level_string[0]) {
+            ogs_warn("Ignore reservation_priorities[%s] "
+                    "without priority_level", res_prio_string);
+            goto next;
+        }
+
+        priority_level = strtol(priority_level_string, &end, 10);
+        if (*end || priority_level < 1 || priority_level > 15) {
+            ogs_warn("Ignore reservation_priorities[%s] "
+                    "invalid priority_level [%s]",
+                    res_prio_string, priority_level_string);
+            goto next;
+        }
+
+        if (self.arp_priority_level[res_prio]) {
+            ogs_warn("Ignore duplicate reservation_priorities res_prio [%s]",
+                    res_prio_string);
+            goto next;
+        }
+
+        self.arp_priority_level[res_prio] = (uint8_t)priority_level;
+
+next:
+        ;
+    } while (ogs_yaml_iter_type(&array) == YAML_SEQUENCE_NODE);
+
+    return OGS_OK;
+}
+
 int pcf_context_parse_config(void)
 {
     int rv;
@@ -430,6 +500,13 @@ int pcf_context_parse_config(void)
                         ogs_error("parse_qos_profiles_conf() failed");
                         return rv;
                     }
+                } else if (!strcmp(pcf_key, "reservation_priorities")) {
+                    rv = parse_reservation_priorities_conf(&pcf_iter);
+                    if (rv != OGS_OK) {
+                        ogs_error(
+                            "parse_reservation_priorities_conf() failed");
+                        return rv;
+                    }
                 } else if (!strcmp(pcf_key, OGS_POLICY_STRING)) {
                     rv = parse_policy_conf(&pcf_iter);
                     if (rv != OGS_OK) {
@@ -456,7 +533,10 @@ pcf_ue_am_t *pcf_ue_am_add(char *supi)
     ogs_assert(supi);
 
     ogs_pool_id_calloc(&pcf_ue_am_pool, &pcf_ue_am);
-    ogs_assert(pcf_ue_am);
+    if (!pcf_ue_am) {
+        ogs_error("No PCF AM UE context available");
+        return NULL;
+    }
 
     /* SBI Type */
     pcf_ue_am->sbi.type = OGS_SBI_OBJ_UE_TYPE;
@@ -552,7 +632,10 @@ pcf_ue_sm_t *pcf_ue_sm_add(char *supi)
     ogs_assert(supi);
 
     ogs_pool_id_calloc(&pcf_ue_sm_pool, &pcf_ue_sm);
-    ogs_assert(pcf_ue_sm);
+    if (!pcf_ue_sm) {
+        ogs_error("No PCF SM UE context available");
+        return NULL;
+    }
 
     pcf_ue_sm->supi = ogs_strdup(supi);
     ogs_assert(pcf_ue_sm->supi);
@@ -611,7 +694,10 @@ pcf_sess_t *pcf_sess_add(pcf_ue_sm_t *pcf_ue_sm, uint8_t psi)
     ogs_assert(psi != OGS_NAS_PDU_SESSION_IDENTITY_UNASSIGNED);
 
     ogs_pool_id_calloc(&pcf_sess_pool, &sess);
-    ogs_assert(sess);
+    if (!sess) {
+        ogs_error("No PCF session context available");
+        return NULL;
+    }
 
     ogs_list_init(&sess->app_list);
 
@@ -927,7 +1013,10 @@ pcf_app_t *pcf_app_add(pcf_sess_t *sess)
     ogs_assert(sess);
 
     ogs_pool_alloc(&pcf_app_pool, &app);
-    ogs_assert(app);
+    if (!app) {
+        ogs_error("No PCF application session available");
+        return NULL;
+    }
     memset(app, 0, sizeof *app);
 
     app->app_session_id = ogs_msprintf("%d",

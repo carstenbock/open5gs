@@ -112,6 +112,7 @@ typedef struct ogs_sbi_context_s {
 
 typedef struct ogs_sbi_nf_instance_s {
     ogs_lnode_t lnode;
+    ogs_pool_id_t pool_id;                  /* Allocation ID for async lookups */
 
     ogs_fsm_t sm;                           /* A state machine */
     ogs_timer_t *t_registration_interval;   /* timer to retry
@@ -287,42 +288,6 @@ typedef struct ogs_sbi_xact_s {
     ogs_pool_id_t assoc_stream_id;
 
     /*
-     * Linkage into the server-side stream that triggered this
-     * outbound transaction.
-     *
-     * When the inbound HTTP/2 stream is closed by the peer (e.g.
-     * RST_STREAM or connection close) before the response from the
-     * upstream NF arrives, every transaction registered on the
-     * stream's xact_list is cancelled. This releases the response
-     * timer back to the pool immediately instead of holding a slot
-     * until the SBI client wait timeout expires, which is the
-     * accumulation that leads to timer-pool exhaustion when a peer
-     * resets streams rapidly while the upstream NF is slow or
-     * unresponsive (issues #4472 and #4473).
-     *
-     * The linkage is managed entirely by lib/sbi:
-     *   - ogs_sbi_discover_and_send() attaches when assoc_stream_id
-     *     is set;
-     *   - ogs_sbi_xact_remove() detaches automatically;
-     *   - stream/session close drains the list and removes every
-     *     attached transaction.
-     *
-     * to_stream_list is both the attachment flag and the cached
-     * list head:
-     *   to_stream_list != NULL
-     *      <=> to_stream_node is on *to_stream_list
-     *      <=> assoc_stream_id refers to the owning stream
-     *
-     * Caching the list head address lets detach unlink in O(1)
-     * without re-resolving the stream from assoc_stream_id.
-     * Transactions with no associated inbound stream (e.g. NRF
-     * discovery initiated by the NF itself, status notifications)
-     * leave the whole linkage group zero-initialised.
-     */
-    ogs_lnode_t to_stream_node;
-    ogs_list_t *to_stream_list;
-
-    /*
      * Optional user context attached to this SBI transaction.
      *
      * This pointer allows NF-specific code to associate arbitrary
@@ -398,6 +363,7 @@ typedef struct ogs_sbi_subscription_spec_s {
 
 typedef struct ogs_sbi_subscription_data_s {
     ogs_lnode_t lnode;
+    ogs_pool_id_t pool_id;                  /* Allocation ID for async lookups */
 
     ogs_time_t validity_duration;           /* valditiyTime(unit: usec) */
     ogs_timer_t *t_validity;                /* check validation */
@@ -530,6 +496,7 @@ void ogs_sbi_nf_instance_clear(ogs_sbi_nf_instance_t *nf_instance);
 void ogs_sbi_nf_instance_remove(ogs_sbi_nf_instance_t *nf_instance);
 void ogs_sbi_nf_instance_remove_all(void);
 ogs_sbi_nf_instance_t *ogs_sbi_nf_instance_find(char *id);
+ogs_sbi_nf_instance_t *ogs_sbi_nf_instance_find_by_pool_id(ogs_pool_id_t id);
 ogs_sbi_nf_instance_t *ogs_sbi_nf_instance_find_by_discovery_param(
         OpenAPI_nf_type_e nf_type,
         OpenAPI_nf_type_e requester_nf_type,
@@ -717,6 +684,14 @@ void ogs_sbi_subscription_data_delete_and_remove_all_by_nf_instance_id(
         const char *nf_instance_id);
 void ogs_sbi_subscription_data_remove_all(void);
 ogs_sbi_subscription_data_t *ogs_sbi_subscription_data_find(char *id);
+ogs_sbi_subscription_data_t *ogs_sbi_subscription_data_find_by_pool_id(
+        ogs_pool_id_t id);
+
+bool ogs_sbi_nf_status_subscription_exists(
+        const char *req_nf_instance_id,
+        OpenAPI_nf_type_e nf_type,
+        OpenAPI_service_name_e service_name,
+        bool confirmed_only);
 
 bool ogs_sbi_supi_in_vplmn(char *supi);
 bool ogs_sbi_plmn_id_in_vplmn(ogs_plmn_id_t *plmn_id);

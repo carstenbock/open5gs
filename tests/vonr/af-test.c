@@ -672,6 +672,9 @@ static void test1_func(abts_case *tc, void *data)
     /* Wait for PCF-Discovery */
     ogs_msleep(100);
 
+    /* Offer 0x72 so the PCF must negotiate it down to 0x12. */
+    af_sess->policyauthorization_features |= 0x60;
+
     /* Send AF-Session : CREATE */
     memset(&af_param, 0, sizeof(af_param));
     af_param.med_type = OpenAPI_media_type_AUDIO;
@@ -721,6 +724,8 @@ static void test1_func(abts_case *tc, void *data)
 
     /* Wait for PDU session resource modify complete */
     ogs_msleep(100);
+
+    ABTS_INT_EQUAL(tc, 0x12, (int)af_sess->policyauthorization_features);
 
     /* Send GTP-U ICMP Packet */
     qos_flow = test_qos_flow_find_by_qfi(sess, 2);
@@ -2642,7 +2647,7 @@ static void test5_func(abts_case *tc, void *data)
 
     ogs_nas_5gs_mobile_identity_suci_t mobile_identity_suci;
     test_ue_t *test_ue = NULL;
-    test_sess_t *sess = NULL;
+    test_sess_t *sess = NULL, *internet = NULL;
     test_bearer_t *qos_flow = NULL;
 
     af_sess_t *af_sess = NULL;
@@ -3172,6 +3177,45 @@ static void test5_func(abts_case *tc, void *data)
     rv = testgnb_ngap_send(ngap, sendbuf);
     ABTS_INT_EQUAL(tc, OGS_OK, rv);
 
+    /* Only IMS was paged. The internet session has no 5G-AN resources. */
+    internet = test_sess_find_by_psi(test_ue, 5);
+    ogs_assert(internet);
+    internet->ul_nas_transport_param.request_type = 0;
+    internet->ul_nas_transport_param.dnn = 0;
+    internet->ul_nas_transport_param.s_nssai = 0;
+
+    gsmbuf = testgsm_build_pdu_session_release_request(internet);
+    ABTS_PTR_NOTNULL(tc, gsmbuf);
+    gmmbuf = testgmm_build_ul_nas_transport(internet,
+            OGS_NAS_PAYLOAD_CONTAINER_N1_SM_INFORMATION, gsmbuf);
+    ABTS_PTR_NOTNULL(tc, gmmbuf);
+    sendbuf = testngap_build_uplink_nas_transport(test_ue, gmmbuf);
+    ABTS_PTR_NOTNULL(tc, sendbuf);
+    rv = testgnb_ngap_send(ngap, sendbuf);
+    ABTS_INT_EQUAL(tc, OGS_OK, rv);
+
+    recvbuf = testgnb_ngap_read(ngap);
+    ABTS_PTR_NOTNULL(tc, recvbuf);
+    testngap_recv(test_ue, recvbuf);
+    ABTS_INT_EQUAL(tc, NGAP_ProcedureCode_id_DownlinkNASTransport,
+            test_ue->ngap_procedure_code);
+    ABTS_INT_EQUAL(tc, OGS_NAS_5GS_PDU_SESSION_RELEASE_COMMAND,
+            test_ue->gsm_message_type);
+
+    gsmbuf = testgsm_build_pdu_session_release_complete(internet);
+    ABTS_PTR_NOTNULL(tc, gsmbuf);
+    gmmbuf = testgmm_build_ul_nas_transport(internet,
+            OGS_NAS_PAYLOAD_CONTAINER_N1_SM_INFORMATION, gsmbuf);
+    ABTS_PTR_NOTNULL(tc, gmmbuf);
+    sendbuf = testngap_build_uplink_nas_transport(test_ue, gmmbuf);
+    ABTS_PTR_NOTNULL(tc, sendbuf);
+    rv = testgnb_ngap_send(ngap, sendbuf);
+    ABTS_INT_EQUAL(tc, OGS_OK, rv);
+    test_sess_remove(internet);
+
+    /* SMContextStatusNotify follows Release Complete asynchronously. */
+    ogs_msleep(300);
+
     /* Send UEContextReleaseRequest */
     sendbuf = testngap_build_ue_context_release_request(test_ue,
             NGAP_Cause_PR_radioNetwork, NGAP_CauseRadioNetwork_user_inactivity,
@@ -3212,6 +3256,7 @@ static void test5_func(abts_case *tc, void *data)
      *  - Type: Mobile terminated services(2)
      *  - PDU Session Status
      */
+    /* Advertise both PSIs so this request cannot itself release PSI 5. */
     test_ue->service_request_param.pdu_session_status = 1;
     test_ue->service_request_param.
             psimask.pdu_session_status = (1 << 5 | 1 << 6);
@@ -3240,7 +3285,8 @@ static void test5_func(abts_case *tc, void *data)
     ABTS_INT_EQUAL(tc,
             NGAP_ProcedureCode_id_InitialContextSetup,
             test_ue->ngap_procedure_code);
-    ABTS_INT_EQUAL(tc, 0x6000, test_ue->pdu_session_status);
+    ABTS_INT_EQUAL(tc, OGS_NAS_5GS_SERVICE_ACCEPT, test_ue->gmm_message_type);
+    ABTS_INT_EQUAL(tc, 0x4000, test_ue->pdu_session_status);
 
     /* Send InitialContextSetupResponse */
     sendbuf = testngap_build_initial_context_setup_response(test_ue, false);
@@ -4839,6 +4885,245 @@ static void test13_func(abts_case *tc, void *data)
 }
 
 
+static void test_issue4672_func(abts_case *tc, void *data)
+{
+    int rv;
+    ogs_socknode_t *ngap = NULL;
+    ogs_socknode_t *gtpu = NULL;
+    test_ue_t *test_ue = NULL;
+    test_sess_t *sess = NULL;
+    test_bearer_t *qos_flow = NULL;
+    af_sess_t *af_sess = NULL;
+    af_npcf_policyauthorization_param_t af_param;
+
+    ogs_pkbuf_t *gmmbuf = NULL;
+    ogs_pkbuf_t *gsmbuf = NULL;
+    ogs_pkbuf_t *sendbuf = NULL;
+    ogs_pkbuf_t *recvbuf = NULL;
+
+    /*
+     * Issue #4672
+     *
+     * Reproduces the smfd crash observed on a VoNR call teardown.
+     */
+    test_af_qos_reference_setup(tc, "0000004672",
+            &test_ue, &sess, &af_sess, &ngap, &gtpu);
+
+    memset(&af_param, 0, sizeof(af_param));
+    af_param.med_type = OpenAPI_media_type_AUDIO;
+    af_param.qos_reference = "test-audio";
+    af_param.qos_type = 1;
+    af_param.flow_type = 99;
+
+    af_local_send_to_pcf(af_sess, &af_param,
+            af_npcf_policyauthorization_build_create);
+
+    qos_flow = test_af_complete_qos_flow_modify(tc, test_ue, sess, ngap);
+    ogs_assert(qos_flow);
+
+    /* UE-initiated deletion of the dedicated QoS flow (QFI 2) */
+    sess->pti = 8;
+    sess->ul_nas_transport_param.request_type =
+        OGS_NAS_5GS_REQUEST_TYPE_MODIFICATION_REQUEST;
+    sess->ul_nas_transport_param.dnn = 1;
+    sess->ul_nas_transport_param.s_nssai = 1;
+
+    sess->pdu_session_establishment_param.ssc_mode = 1;
+    sess->pdu_session_establishment_param.epco = 1;
+
+    gsmbuf = testgsm_build_pdu_session_modification_request(
+        qos_flow,
+        OGS_5GSM_CAUSE_REGULAR_DEACTIVATION,
+        OGS_NAS_QOS_CODE_DELETE_EXISTING_QOS_RULE,
+        OGS_NAS_DELETE_NEW_QOS_FLOW_DESCRIPTION);
+    ABTS_PTR_NOTNULL(tc, gsmbuf);
+    gmmbuf = testgmm_build_ul_nas_transport(sess,
+            OGS_NAS_PAYLOAD_CONTAINER_N1_SM_INFORMATION, gsmbuf);
+    ABTS_PTR_NOTNULL(tc, gmmbuf);
+    sendbuf = testngap_build_uplink_nas_transport(test_ue, gmmbuf);
+    ABTS_PTR_NOTNULL(tc, sendbuf);
+    rv = testgnb_ngap_send(ngap, sendbuf);
+    ABTS_INT_EQUAL(tc, OGS_OK, rv);
+
+    /* Receive PDUSessionResourceModifyRequest +
+     * DL NAS transport +
+     * PDU session modification command */
+    recvbuf = testgnb_ngap_read(ngap);
+    ABTS_PTR_NOTNULL(tc, recvbuf);
+    testngap_recv(test_ue, recvbuf);
+    ABTS_INT_EQUAL(tc,
+            NGAP_ProcedureCode_id_PDUSessionResourceModify,
+            test_ue->ngap_procedure_code);
+
+    /*
+     * The QoS rule delete drives removal of the dedicated QoS flow, so
+     * smfd releases QFI 2. Acknowledge the release at NGAP and complete
+     * the modification at NAS, then drop the test-side bearer.
+     */
+    qos_flow = test_qos_flow_find_by_qfi(sess, 2);
+    ogs_assert(qos_flow);
+
+    sendbuf = testngap_build_qos_flow_resource_release_response(qos_flow);
+    ABTS_PTR_NOTNULL(tc, sendbuf);
+    rv = testgnb_ngap_send(ngap, sendbuf);
+    ABTS_INT_EQUAL(tc, OGS_OK, rv);
+
+    sess->ul_nas_transport_param.request_type =
+        OGS_NAS_5GS_REQUEST_TYPE_MODIFICATION_REQUEST;
+    sess->ul_nas_transport_param.dnn = 0;
+    sess->ul_nas_transport_param.s_nssai = 0;
+
+    sess->pdu_session_establishment_param.ssc_mode = 0;
+    sess->pdu_session_establishment_param.epco = 0;
+
+    gsmbuf = testgsm_build_pdu_session_modification_complete(sess);
+    ABTS_PTR_NOTNULL(tc, gsmbuf);
+    gmmbuf = testgmm_build_ul_nas_transport(sess,
+            OGS_NAS_PAYLOAD_CONTAINER_N1_SM_INFORMATION, gsmbuf);
+    ABTS_PTR_NOTNULL(tc, gmmbuf);
+    sendbuf = testngap_build_uplink_nas_transport(test_ue, gmmbuf);
+    ABTS_PTR_NOTNULL(tc, sendbuf);
+    rv = testgnb_ngap_send(ngap, sendbuf);
+    ABTS_INT_EQUAL(tc, OGS_OK, rv);
+
+    test_bearer_remove(qos_flow);
+
+    ogs_msleep(100);
+
+    /*
+     * The dedicated QoS flow was removed by the UE, but the AF/PCF
+     * policy authorization that created it is still active. Tear it
+     * down through the AF (Npcf_PolicyAuthorization delete) so the app
+     * session is terminated cleanly and no dangling status
+     * notification is later sent to a removed app session. Because the
+     * QoS flow is already gone, smfd takes the "already removed" path
+     * in binding.c and issues no further PDUSessionResourceModify, so
+     * there is nothing more to read here. The AF removes af_sess itself
+     * on the delete response (tests/af/af-sm.c), so it must not be
+     * removed again.
+     */
+    af_local_send_to_pcf(af_sess, NULL,
+            af_npcf_policyauthorization_build_delete);
+
+    ogs_msleep(100);
+
+    test_af_qos_reference_cleanup(tc, test_ue, ngap, gtpu);
+}
+
+static void test_arp_update_func(abts_case *tc, void *data)
+{
+    ogs_socknode_t *ngap = NULL;
+    ogs_socknode_t *gtpu = NULL;
+    test_ue_t *test_ue = NULL;
+    test_sess_t *sess = NULL;
+    test_bearer_t *qos_flow = NULL;
+    af_sess_t *af_sess = NULL;
+    af_npcf_policyauthorization_param_t af_param;
+    ogs_qos_t created;
+
+    /*
+     * AF-requested ARP over N5
+     *
+     * An update that carries only ARP must modify the QoS flow ARP
+     * and keep the bitrates negotiated on create. The resPrio here is
+     * not mapped in the PCF config, so only preemptCap/preemptVuln
+     * change while the priority level stays as provisioned in DB.
+     */
+    test_af_qos_reference_setup(tc, "0000004793",
+            &test_ue, &sess, &af_sess, &ngap, &gtpu);
+
+    /* Create with bandwidth : dedicated QoS flow(QFI 2) */
+    memset(&af_param, 0, sizeof(af_param));
+    af_param.med_type = OpenAPI_media_type_AUDIO;
+    af_param.qos_reference = "test-audio";
+    af_param.qos_type = 1;
+    af_param.flow_type = 99;
+
+    af_local_send_to_pcf(af_sess, &af_param,
+            af_npcf_policyauthorization_build_create);
+
+    qos_flow = test_af_complete_qos_flow_modify(tc, test_ue, sess, ngap);
+    ogs_assert(qos_flow);
+
+    /* ARP as provisioned in DB (priority 3, may pre-empt, pre-emptable) */
+    ABTS_INT_EQUAL(tc, 3, qos_flow->qos.arp.priority_level);
+    ABTS_INT_EQUAL(tc, OGS_5GC_PRE_EMPTION_ENABLED,
+            qos_flow->qos.arp.pre_emption_capability);
+    ABTS_INT_EQUAL(tc, OGS_5GC_PRE_EMPTION_ENABLED,
+            qos_flow->qos.arp.pre_emption_vulnerability);
+    ABTS_TRUE(tc, qos_flow->qos.mbr.downlink != 0);
+    ABTS_TRUE(tc, qos_flow->qos.gbr.uplink != 0);
+    created = qos_flow->qos;
+
+    /* Update with ARP only : unmapped resPrio + pre-emption off */
+    memset(&af_param, 0, sizeof(af_param));
+    af_param.med_type = OpenAPI_media_type_AUDIO;
+    af_param.qos_reference = "test-audio";
+    af_param.res_prio = OpenAPI_reserv_priority_PRIO_1;
+    af_param.preempt_cap = OpenAPI_preemption_capability_NOT_PREEMPT;
+    af_param.preempt_vuln = OpenAPI_preemption_vulnerability_NOT_PREEMPTABLE;
+
+    af_local_send_to_pcf(af_sess, &af_param,
+            af_npcf_policyauthorization_build_update_arp);
+
+    qos_flow = test_af_complete_qos_flow_modify(tc, test_ue, sess, ngap);
+    ogs_assert(qos_flow);
+
+    ABTS_INT_EQUAL(tc, 3, qos_flow->qos.arp.priority_level);
+    ABTS_INT_EQUAL(tc, OGS_5GC_PRE_EMPTION_DISABLED,
+            qos_flow->qos.arp.pre_emption_capability);
+    ABTS_INT_EQUAL(tc, OGS_5GC_PRE_EMPTION_DISABLED,
+            qos_flow->qos.arp.pre_emption_vulnerability);
+
+    /* Bitrates negotiated on create are kept */
+    ABTS_TRUE(tc, created.mbr.downlink == qos_flow->qos.mbr.downlink);
+    ABTS_TRUE(tc, created.mbr.uplink == qos_flow->qos.mbr.uplink);
+    ABTS_TRUE(tc, created.gbr.downlink == qos_flow->qos.gbr.downlink);
+    ABTS_TRUE(tc, created.gbr.uplink == qos_flow->qos.gbr.uplink);
+
+    test_af_qos_reference_delete(tc, test_ue, sess, af_sess, ngap);
+    test_af_qos_reference_cleanup(tc, test_ue, ngap, gtpu);
+}
+
+/*
+ * Issue #4899
+ * Subscription to Notification of Signalling Path Status (no medType)
+ * is accepted by create and update, and no QoS flow is added.
+ */
+static void test_issue4899_func(abts_case *tc, void *data)
+{
+    ogs_socknode_t *ngap = NULL;
+    ogs_socknode_t *gtpu = NULL;
+    test_ue_t *test_ue = NULL;
+    test_sess_t *sess = NULL;
+    af_sess_t *af_sess = NULL;
+
+    test_af_qos_reference_setup(tc, "0000004899",
+            &test_ue, &sess, &af_sess, &ngap, &gtpu);
+
+    af_local_send_to_pcf(af_sess, NULL,
+            af_npcf_policyauthorization_build_create_signalling);
+
+    ogs_msleep(100);
+    ABTS_INT_EQUAL(tc, OGS_SBI_HTTP_STATUS_CREATED,
+            af_sess->last_pcf_status);
+
+    af_local_send_to_pcf(af_sess, NULL,
+            af_npcf_policyauthorization_build_update_signalling);
+
+    ogs_msleep(100);
+    ABTS_INT_EQUAL(tc, OGS_SBI_HTTP_STATUS_OK, af_sess->last_pcf_status);
+
+    ABTS_TRUE(tc, test_qos_flow_find_by_qfi(sess, 2) == NULL);
+
+    af_local_send_to_pcf(af_sess, NULL,
+            af_npcf_policyauthorization_build_delete);
+
+    ogs_msleep(100);
+
+    test_af_qos_reference_cleanup(tc, test_ue, ngap, gtpu);
+}
+
 abts_suite *test_af(abts_suite *suite)
 {
     suite = ADD_SUITE(suite)
@@ -4863,6 +5148,9 @@ abts_suite *test_af(abts_suite *suite)
     abts_run_test(suite, test11_func, NULL);
     abts_run_test(suite, test12_func, NULL);
     abts_run_test(suite, test13_func, NULL);
+    abts_run_test(suite, test_issue4672_func, NULL);
+    abts_run_test(suite, test_arp_update_func, NULL);
+    abts_run_test(suite, test_issue4899_func, NULL);
 
     return suite;
 }

@@ -125,6 +125,14 @@ static void pfcp_recv_cb(short when, ogs_socket_t fd, void *data)
     node = ogs_pfcp_node_find(&ogs_pfcp_self()->pfcp_peer_list,
             pfcp_status == OGS_PFCP_STATUS_SUCCESS ? &node_id : NULL, &from);
     if (!node) {
+        /* TS 29.244 6.2.2.2 */
+        if (message->h.type == OGS_PFCP_HEARTBEAT_REQUEST_TYPE &&
+            !message->h.seid_presence &&
+            message->pfcp_heartbeat_request.recovery_time_stamp.presence) {
+            ogs_pfcp_send_heartbeat_response_to(fd, &from, message->h.sqn);
+            goto cleanup;
+        }
+
         if (message->h.type == OGS_PFCP_ASSOCIATION_SETUP_REQUEST_TYPE ||
             message->h.type == OGS_PFCP_ASSOCIATION_SETUP_RESPONSE_TYPE) {
             ogs_assert(pfcp_status == OGS_PFCP_STATUS_SUCCESS);
@@ -370,12 +378,14 @@ int sgwu_pfcp_send_session_report_request(
     sxabuf = ogs_pfcp_build_session_report_request(h.type, report);
     if (!sxabuf) {
         ogs_error("ogs_pfcp_build_session_report_request() failed");
+        ogs_pfcp_xact_delete(xact);
         return OGS_ERROR;
     }
 
     rv = ogs_pfcp_xact_update_tx(xact, &h, sxabuf);
     if (rv != OGS_OK) {
         ogs_error("ogs_pfcp_xact_update_tx() failed");
+        ogs_pfcp_xact_delete(xact);
         return OGS_ERROR;
     }
 

@@ -241,9 +241,35 @@ int amf_nsmf_pdusession_handle_create_sm_context(
     return OGS_OK;
 }
 
+/*
+ * [Issue #4741]
+ *
+ * Does a successful Update SM Context of this kind decide where the user
+ * plane is? Only the procedures that carry it do: an activation
+ * (amf_sbi_send_activating_session() and the states that report its N2
+ * outcome), a deactivation, and a handover actually completing. MODIFIED
+ * and the N1-only exchanges say nothing about the DL endpoint.
+ */
+static bool update_sm_context_supersedes_stale_user_plane(int state)
+{
+    switch (state) {
+    case AMF_UPDATE_SM_CONTEXT_ACTIVATED:
+    case AMF_UPDATE_SM_CONTEXT_SETUP_FAIL:
+    case AMF_UPDATE_SM_CONTEXT_DEACTIVATED:
+    case AMF_UPDATE_SM_CONTEXT_REGISTRATION_REQUEST:
+    case AMF_UPDATE_SM_CONTEXT_SERVICE_REQUEST:
+    case AMF_UPDATE_SM_CONTEXT_PATH_SWITCH_REQUEST:
+    case AMF_UPDATE_SM_CONTEXT_HANDOVER_NOTIFY:
+    case AMF_UPDATE_SM_CONTEXT_STALE_USER_PLANE:
+        return true;
+    default:
+        return false;
+    }
+}
+
 int amf_nsmf_pdusession_handle_update_sm_context(
         amf_ue_t *amf_ue, ran_ue_t *ran_ue, amf_sess_t *sess,
-        int state, ogs_sbi_message_t *recvmsg)
+        int state, ogs_pool_id_t target_ue_id, ogs_sbi_message_t *recvmsg)
 {
     int r;
 
@@ -259,6 +285,26 @@ int amf_nsmf_pdusession_handle_update_sm_context(
         return OGS_ERROR;
     }
 
+    if (state == AMF_UPDATE_SM_CONTEXT_STALE_USER_PLANE) {
+        /*
+         * Cleanup for an NG context that is already gone. No NAS procedure
+         * is waiting on it, and the generic handling below would answer an
+         * unexpected or malformed response with an Error Indication
+         * towards ran_ue, which here is the NG context the UE is using
+         * now, so it must not run.
+         */
+        if (recvmsg->res_status == OGS_SBI_HTTP_STATUS_NO_CONTENT ||
+            recvmsg->res_status == OGS_SBI_HTTP_STATUS_OK) {
+            ogs_info("[%s:%d] Stale user plane deactivated",
+                    amf_ue->supi, sess->psi);
+            return OGS_OK;
+        }
+
+        ogs_error("[%s:%d] Stale user plane deactivation failed [%d]",
+                amf_ue->supi, sess->psi, recvmsg->res_status);
+        return OGS_ERROR;
+    }
+
     if (recvmsg->res_status == OGS_SBI_HTTP_STATUS_NO_CONTENT ||
         recvmsg->res_status == OGS_SBI_HTTP_STATUS_OK) {
 
@@ -268,23 +314,19 @@ int amf_nsmf_pdusession_handle_update_sm_context(
         ogs_pkbuf_t *n1smbuf = NULL;
         ogs_pkbuf_t *n2smbuf = NULL;
 
-        if (recvmsg->SmContextUpdatedData &&
-            recvmsg->SmContextUpdatedData->n2_sm_info) {
-
-            SmContextUpdatedData = recvmsg->SmContextUpdatedData;
-            ogs_assert(SmContextUpdatedData);
+        SmContextUpdatedData = recvmsg->SmContextUpdatedData;
+        if (SmContextUpdatedData) {
+            n1SmMsg = SmContextUpdatedData->n1_sm_msg;
+            if (n1SmMsg && n1SmMsg->content_id)
+                n1smbuf = ogs_sbi_find_part_by_content_id(
+                        recvmsg, n1SmMsg->content_id);
             n2SmInfo = SmContextUpdatedData->n2_sm_info;
-            ogs_assert(n2SmInfo);
+        }
 
+        if (n2SmInfo) {
             if (n2SmInfo->content_id) {
                 n2smbuf = ogs_sbi_find_part_by_content_id(
                         recvmsg, n2SmInfo->content_id);
-            }
-
-            n1SmMsg = SmContextUpdatedData->n1_sm_msg;
-            if (n1SmMsg && n1SmMsg->content_id) {
-                n1smbuf = ogs_sbi_find_part_by_content_id(
-                        recvmsg, n1SmMsg->content_id);
             }
 
             switch (SmContextUpdatedData->n2_sm_info_type) {
@@ -356,7 +398,6 @@ int amf_nsmf_pdusession_handle_update_sm_context(
                                 AMF_UPDATE_SM_CONTEXT_HANDOVER_REQUIRED)) {
                         r = ngap_send_handover_request(amf_ue);
                         ogs_expect(r == OGS_OK);
-                        ogs_assert(r != OGS_ERROR);
 
                         AMF_UE_CLEAR_N2_TRANSFER(amf_ue, handover_request);
                     }
@@ -482,11 +523,8 @@ int amf_nsmf_pdusession_handle_update_sm_context(
                         ogs_pkbuf_copy(n2smbuf));
 
                 if (AMF_SESSION_SYNC_DONE(amf_ue, state)) {
-                    r = ngap_send_path_switch_ack(sess);
+                    r = ngap_send_path_switch_result(amf_ue);
                     ogs_expect(r == OGS_OK);
-                    ogs_assert(r != OGS_ERROR);
-
-                    AMF_UE_CLEAR_N2_TRANSFER(amf_ue, path_switch_request_ack);
                 }
                 break;
 
@@ -526,8 +564,6 @@ int amf_nsmf_pdusession_handle_update_sm_context(
             }
 
         } else {
-            SmContextUpdatedData = recvmsg->SmContextUpdatedData;
-
             if (state == AMF_UPDATE_SM_CONTEXT_ACTIVATED) {
                 /*
                  * 1. PDUSessionResourceSetupResponse
@@ -605,22 +641,25 @@ int amf_nsmf_pdusession_handle_update_sm_context(
                 }
 
             } else if (state == AMF_UPDATE_SM_CONTEXT_MODIFIED) {
-                /*
-                 * 1. PDUSessionResourceModifyResponse
-                 * 2. /nsmf-pdusession/v1/sm-contexts/{smContextRef}/modify
-                 * 3. PFCP Session Modifcation Request
-                 * 4. PFCP Session Modifcation Response
-                 */
+                /* A UE-requested release can carry the N1 command alone. */
+                if (n1SmMsg) {
+                    uint8_t type = nas_5gsm_message_type(n1smbuf, sess->psi);
 
-                /*
-                 * 1. PDU session release request
-                 * 2. /nsmf-pdusession/v1/sm-contexts/{smContextRef}/modify
-                 */
+                    if (!type || SmContextUpdatedData->n2_sm_info_type) {
+                        ogs_error("[%s:%d] Invalid N1-only SM context update",
+                                amf_ue->supi, sess->psi);
+                        return OGS_ERROR;
+                    }
 
-                /*
-                 * 1. PDU session modification complete
-                 * 2. /nsmf-pdusession/v1/sm-contexts/{smContextRef}/modify
-                 */
+                    if (type == OGS_NAS_5GS_PDU_SESSION_RELEASE_COMMAND) {
+                        n1smbuf = ogs_pkbuf_copy(n1smbuf);
+                        ogs_assert(n1smbuf);
+                        r = nas_send_pdu_session_release_command(
+                                sess, n1smbuf, NULL);
+                        if (r != OGS_OK)
+                            return r;
+                    }
+                }
 
             } else if (state == AMF_UPDATE_SM_CONTEXT_DEACTIVATED) {
                 /*
@@ -763,8 +802,10 @@ int amf_nsmf_pdusession_handle_update_sm_context(
                 if (AMF_SESSION_SYNC_DONE(amf_ue, state)) {
                     ran_ue_t *target_ue = NULL;
 
-                    ogs_assert(ran_ue);
-                    target_ue = ran_ue_find_by_id(ran_ue->target_ue_id);
+                    if (target_ue_id >= OGS_MIN_POOL_ID &&
+                            target_ue_id <= OGS_MAX_POOL_ID)
+                        target_ue = ran_ue_find_by_id(target_ue_id);
+
                     if (target_ue) {
                         r = ngap_send_ran_ue_context_release_command(
                                 target_ue,
@@ -774,8 +815,8 @@ int amf_nsmf_pdusession_handle_update_sm_context(
                         ogs_expect(r == OGS_OK);
                         ogs_assert(r != OGS_ERROR);
                     } else {
-                        ogs_warn("[%s] RAN-NG Context has already been removed",
-                                amf_ue->supi);
+                        ogs_warn("[%s] Target RAN-NG Context has already "
+                                "been removed", amf_ue->supi);
                     }
                 }
 
@@ -925,14 +966,19 @@ int amf_nsmf_pdusession_handle_update_sm_context(
                             /* All GNB_UE context
                              * where PartOfNG_interface was requested
                              * REMOVED */
-                            ogs_assert(gnb->ng_reset_ack);
-                            r = ngap_send_to_gnb(
-                                gnb, gnb->ng_reset_ack, NGAP_NON_UE_SIGNALLING);
-                            ogs_expect(r == OGS_OK);
-                            ogs_assert(r != OGS_ERROR);
+                            if (gnb->ng_reset_ack) {
+                                r = ngap_send_to_gnb(gnb, gnb->ng_reset_ack,
+                                        NGAP_NON_UE_SIGNALLING);
+                                ogs_expect(r == OGS_OK);
+                                ogs_assert(r != OGS_ERROR);
 
-                            /* Clear NG-Reset Ack Buffer */
-                            gnb->ng_reset_ack = NULL;
+                                /* Clear NG-Reset Ack Buffer */
+                                gnb->ng_reset_ack = NULL;
+                            } else {
+                                ogs_error("No NG-Reset Ack buffer "
+                                        "[gNB-ID:%llu]",
+                                        (unsigned long long)gnb->id);
+                            }
                         }
                     } else {
                         ogs_warn("[%s] RAN-NG Context has already been removed",
@@ -989,9 +1035,38 @@ int amf_nsmf_pdusession_handle_update_sm_context(
             if (sess->n1_released == true &&
                 sess->n2_released == true &&
                 sess->resource_status == OpenAPI_resource_status_RELEASED) {
-                amf_nsmf_pdusession_handle_release_sm_context(
+                return amf_nsmf_pdusession_handle_release_sm_context(
                         amf_ue, ran_ue, sess, AMF_RELEASE_SM_CONTEXT_NO_STATE);
             }
+        }
+
+        /*
+         * [Issue #4741]
+         *
+         * The SMF has accepted a procedure that itself moves the user
+         * plane, issued on a DIFFERENT NG context, so its view has moved
+         * past the one a held context left behind and the note is spent.
+         *
+         * Every condition carries weight, including where this sits. It
+         * comes after all of the processing above so that the returns on
+         * missing or malformed N1/N2 content keep the note: an HTTP
+         * success alone is not the procedure succeeding. An answer for
+         * the noted context itself proves nothing - it is the user plane
+         * that is going stale, and a late ACTIVATED for it must not
+         * silently cancel the cleanup. An answer to a procedure that
+         * does not carry the user plane - MODIFIED, an N1-only exchange -
+         * proves nothing either way. And dispatching is deliberately not
+         * enough: OGS_OK from amf_sess_sbi_discover_and_send() means the
+         * transaction started, not that the SMF took it, so a request
+         * that never arrives leaves the note for the removal of the held
+         * context to act on.
+         */
+        if (sess->stale_ran_ue_id != OGS_INVALID_POOL_ID &&
+            (!ran_ue || sess->stale_ran_ue_id != ran_ue->id) &&
+            update_sm_context_supersedes_stale_user_plane(state)) {
+            ogs_debug("[%s:%d] Stale user plane superseded by the SMF "
+                    "[state:%d]", amf_ue->supi, sess->psi, state);
+            sess->stale_ran_ue_id = OGS_INVALID_POOL_ID;
         }
     } else {
         OpenAPI_sm_context_update_error_t *SmContextUpdateError = NULL;
@@ -1016,6 +1091,54 @@ int amf_nsmf_pdusession_handle_update_sm_context(
         }
 
         SmContextUpdateError = recvmsg->SmContextUpdateError;
+        ProblemDetails = SmContextUpdateError ? SmContextUpdateError->error : NULL;
+        if (state == AMF_UPDATE_SM_CONTEXT_PATH_SWITCH_REQUEST) {
+            /*
+             * TS 29.502 5.2.2.3.3: preserve the failure cause from the SMF.
+             * An error without N2 SM information (e.g. an unknown SM context)
+             * still needs an Unsuccessful Transfer for the released list.
+             */
+            OpenAPI_ref_to_binary_data_t *n2SmInfo =
+                SmContextUpdateError ? SmContextUpdateError->n2_sm_info : NULL;
+            ogs_pkbuf_t *n2smbuf = NULL;
+
+            ogs_error("[%s:%d] Path switch failed [%d:%s]",
+                    amf_ue->supi, sess->psi, recvmsg->res_status,
+                    ProblemDetails && ProblemDetails->cause ?
+                        ProblemDetails->cause : "Unknown");
+
+            if (SmContextUpdateError && SmContextUpdateError->n2_sm_info_type ==
+                    OpenAPI_n2_sm_info_type_PATH_SWITCH_REQ_FAIL &&
+                n2SmInfo && n2SmInfo->content_id)
+                n2smbuf = ogs_sbi_find_part_by_content_id(
+                        recvmsg, n2SmInfo->content_id);
+            if (n2smbuf) {
+                /* The SBI message may be freed before the last SMF reply. */
+                n2smbuf = ogs_pkbuf_copy(n2smbuf);
+            } else {
+                ogs_warn("[%s:%d] No Path Switch Request Unsuccessful "
+                        "Transfer", amf_ue->supi, sess->psi);
+                n2smbuf =
+                    ngap_build_path_switch_request_unsuccessful_transfer(
+                        NGAP_Cause_PR_misc, NGAP_CauseMisc_unspecified);
+            }
+            if (n2smbuf) {
+                AMF_SESS_STORE_N2_TRANSFER(
+                        sess, path_switch_request_unsuccessful, n2smbuf);
+            } else {
+                ogs_error("[%s:%d] No Path Switch Request Unsuccessful "
+                        "Transfer built - left out of the answer",
+                        amf_ue->supi, sess->psi);
+            }
+
+            if (AMF_SESSION_SYNC_DONE(amf_ue, state)) {
+                r = ngap_send_path_switch_result(amf_ue);
+                ogs_expect(r == OGS_OK);
+            }
+
+            return OGS_ERROR;
+        }
+
         if (!SmContextUpdateError) {
             ogs_error("[%d:%d] No SmContextUpdateError [%d]",
                     sess->psi, sess->pti, recvmsg->res_status);
@@ -1027,7 +1150,6 @@ int amf_nsmf_pdusession_handle_update_sm_context(
             return OGS_ERROR;
         }
 
-        ProblemDetails = SmContextUpdateError->error;
         if (!ProblemDetails) {
             ogs_error("[%d:%d] No ProblemDetails [%d]",
                     sess->psi, sess->pti, recvmsg->res_status);
@@ -1157,6 +1279,38 @@ int amf_nsmf_pdusession_handle_release_sm_context(
         return OGS_ERROR;
     }
 
+    if (state == AMF_RELEASE_SM_CONTEXT_AUTHENTICATED_REGISTRATION) {
+        bool continue_registration =
+            amf_ue->registration_session_release_pending &&
+            amf_ue->nas.message_type == OGS_NAS_5GS_REGISTRATION_REQUEST &&
+            OGS_FSM_CHECK(&amf_ue->sm, gmm_state_initial_context_setup);
+
+        AMF_SESS_CLEAR(sess);
+        if (!continue_registration) {
+            ogs_error("[%s] Ignore stale registration session release result",
+                    amf_ue->supi);
+            return OGS_OK;
+        }
+
+        if (!ran_ue || !RAN_UE_IS_SERVING(amf_ue, ran_ue)) {
+            amf_sbi_cancel_registration_session_release(amf_ue);
+            ogs_error("[%s] No serving NG context after registration session "
+                    "release", amf_ue->supi);
+            return OGS_OK;
+        }
+
+        if (AMF_SESSION_SYNC_DONE(amf_ue,
+                    AMF_RELEASE_SM_CONTEXT_AUTHENTICATED_REGISTRATION)) {
+            amf_ue->registration_session_release_pending = false;
+            r = amf_ue_sbi_discover_and_send(
+                    OpenAPI_service_name_nudm_uecm, NULL,
+                    amf_nudm_uecm_build_registration, amf_ue, 0, NULL);
+            ogs_expect(r == OGS_OK);
+            ogs_assert(r != OGS_ERROR);
+        }
+        return OGS_OK;
+    }
+
     /*
      * To check if Reactivation Request has been used.
      *
@@ -1181,13 +1335,8 @@ int amf_nsmf_pdusession_handle_release_sm_context(
          * when a PDU session release command with a Reactivation Request
          * and a PDU session release complete are sent at the same time.
          *
-         * It is important to note that XXX_gsm_type, which is initialized now,
-         * has a different initialization location than
-         * pdu_session_release_complete_received/
-         * pdu_session_resource_release_response_received
-         *
-         * XXX_received is initialized in the ESTABLISHMENT phase,
-         * but XXX_gsm_type must be initialized in the RELEASE phase.
+         * Reset the NAS message types here. The establishment request
+         * already reset the UE and RAN release flags for the new session.
          */
         sess->old_gsm_type = 0;
         sess->current_gsm_type = 0;
@@ -1411,12 +1560,16 @@ int amf_nsmf_pdusession_handle_release_sm_context(
                 } else if (OGS_FSM_CHECK(&amf_ue->sm,
                             gmm_state_authentication)) {
 
-                    r = amf_ue_sbi_discover_and_send(
-                            OpenAPI_service_name_nausf_auth, NULL,
-                            amf_nausf_auth_build_authenticate,
-                            amf_ue, 0, NULL);
-                    ogs_expect(r == OGS_OK);
-                    ogs_assert(r != OGS_ERROR);
+                    /* A new registration may already have started AKA
+                     * while this older session release was pending. */
+                    if (!amf_ue->registration_session_release_after_authentication) {
+                        r = amf_ue_sbi_discover_and_send(
+                                OpenAPI_service_name_nausf_auth, NULL,
+                                amf_nausf_auth_build_authenticate,
+                                amf_ue, 0, NULL);
+                        ogs_expect(r == OGS_OK);
+                        ogs_assert(r != OGS_ERROR);
+                    }
 
                 } else if (OGS_FSM_CHECK(
                             &amf_ue->sm, gmm_state_security_mode)) {

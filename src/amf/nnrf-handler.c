@@ -21,11 +21,12 @@
 #include "nas-path.h"
 #include "ngap-path.h"
 #include "nnrf-handler.h"
+#include "n5geir-handler.h"
 
 
 static bool amf_nnrf_try_old_amf_discovery_fallback(
         amf_ue_t *amf_ue, OpenAPI_nf_type_e requester_nf_type,
-        ogs_sbi_discovery_option_t *discovery_option)
+        bool guami_presence)
 {
     int r;
 
@@ -42,7 +43,7 @@ static bool amf_nnrf_try_old_amf_discovery_fallback(
             amf_ue->nas.registration.value !=
                 OGS_NAS_5GS_REGISTRATION_TYPE_INITIAL ||
             requester_nf_type != OpenAPI_nf_type_AMF ||
-            !discovery_option || !discovery_option->guami_presence)
+            !guami_presence)
         return false;
 
     /*
@@ -119,7 +120,7 @@ static void amf_nnrf_send_session_failure_to_ran(
 void amf_nnrf_handle_nf_discover(
         ogs_sbi_xact_t *xact, ogs_sbi_message_t *recvmsg)
 {
-    int r;
+    int r, state;
 
     ogs_sbi_nf_instance_t *nf_instance = NULL;
     ogs_sbi_object_t *sbi_object = NULL;
@@ -128,6 +129,7 @@ void amf_nnrf_handle_nf_discover(
     OpenAPI_nf_type_e target_nf_type = OpenAPI_nf_type_NULL;
     OpenAPI_nf_type_e requester_nf_type = OpenAPI_nf_type_NULL;
     ogs_sbi_discovery_option_t *discovery_option = NULL;
+    bool guami_presence = false;
 
     amf_ue_t *amf_ue = NULL;
     amf_sess_t *sess = NULL;
@@ -140,6 +142,7 @@ void amf_nnrf_handle_nf_discover(
     ogs_assert(xact);
     sbi_object = xact->sbi_object;
     ogs_assert(sbi_object);
+    state = xact->state;
     service_name = xact->service_name;
     ogs_assert(service_name);
     target_nf_type = ogs_sbi_service_name_to_nf_type(service_name);
@@ -151,7 +154,15 @@ void amf_nnrf_handle_nf_discover(
     ogs_assert(sbi_object_id >= OGS_MIN_POOL_ID &&
             sbi_object_id <= OGS_MAX_POOL_ID);
 
+    /*
+     * The transaction owns discovery_option, and ogs_sbi_xact_remove()
+     * frees it. Snapshot the only field that is still needed after the
+     * transaction is released, exactly as ran_ue_id is copied out of
+     * xact->user_data below.
+     */
     discovery_option = xact->discovery_option;
+    if (discovery_option)
+        guami_presence = discovery_option->guami_presence;
 
     SearchResult = recvmsg->SearchResult;
     if (!SearchResult) {
@@ -173,6 +184,13 @@ void amf_nnrf_handle_nf_discover(
     if (sbi_object->type == OGS_SBI_OBJ_UE_TYPE) {
         amf_ue = amf_ue_find_by_id(sbi_object_id);
         ogs_assert(amf_ue);
+        if (AMF_AUTH_XACT_STATE(service_name, state) &&
+                (amf_ue->confirmation_for_5g_aka.xact_id != xact->id ||
+                 !OGS_FSM_CHECK(&amf_ue->sm, gmm_state_authentication))) {
+            /* Discovery completed after this authentication was superseded. */
+            ogs_sbi_xact_remove(xact);
+            return;
+        }
     } else if (sbi_object->type == OGS_SBI_OBJ_SESS_TYPE) {
         sess = amf_sess_find_by_id(sbi_object_id);
         ogs_assert(sess);
@@ -202,6 +220,10 @@ void amf_nnrf_handle_nf_discover(
     nf_instance = ogs_sbi_nf_instance_find_by_discovery_param(
                     target_nf_type, requester_nf_type, discovery_option);
     if (!nf_instance) {
+        if (AMF_AUTH_XACT_STATE(service_name, state)) {
+            amf_nnrf_handle_failed_amf_discovery(xact);
+            return;
+        }
         ogs_sbi_xact_remove(xact);
 
         switch(sbi_object->type) {
@@ -209,8 +231,13 @@ void amf_nnrf_handle_nf_discover(
             ogs_warn("[%s] (NF discover) No [%s]", amf_ue->suci,
                     OpenAPI_service_name_ToString(service_name));
 
+            if (service_name == OpenAPI_service_name_n5g_eir_eic) {
+                amf_n5geir_eic_handle_discovery_failure(amf_ue);
+                break;
+            }
+
             if (amf_nnrf_try_old_amf_discovery_fallback(
-                    amf_ue, requester_nf_type, discovery_option))
+                    amf_ue, requester_nf_type, guami_presence))
                 break;
 
             if (amf_ue->nas.message_type ==
@@ -226,6 +253,12 @@ void amf_nnrf_handle_nf_discover(
             ogs_assert(r != OGS_ERROR);
             break;
         case OGS_SBI_OBJ_SESS_TYPE:
+            if (state == AMF_RELEASE_SM_CONTEXT_AUTHENTICATED_REGISTRATION) {
+                amf_sbi_fail_registration_session_release(amf_ue,
+                        ran_ue_find_by_id(ran_ue_id),
+                        OGS_SBI_HTTP_STATUS_GATEWAY_TIMEOUT);
+                break;
+            }
             ogs_warn("[%d:%d] (NF discover) No [%s]", sess->psi, sess->pti,
                         OpenAPI_service_name_ToString(service_name));
 
@@ -253,11 +286,13 @@ void amf_nnrf_handle_failed_amf_discovery(
     int r;
 
     OpenAPI_nf_type_e requester_nf_type = OpenAPI_nf_type_NULL;
-    ogs_sbi_discovery_option_t *discovery_option = NULL;
+    bool guami_presence = false;
     OpenAPI_service_name_e service_name = OpenAPI_service_name_NULL;
     ogs_sbi_object_t *sbi_object = NULL;
     ogs_pool_id_t sbi_object_id = OGS_INVALID_POOL_ID;
     ogs_pool_id_t ran_ue_id = OGS_INVALID_POOL_ID;
+    ogs_pool_id_t xact_id;
+    int state = 0;
 
     amf_ue_t *amf_ue = NULL;
     amf_sess_t *sess = NULL;
@@ -269,12 +304,20 @@ void amf_nnrf_handle_failed_amf_discovery(
     ogs_assert(service_name);
     requester_nf_type = sbi_xact->requester_nf_type;
     ogs_assert(requester_nf_type);
+    state = sbi_xact->state;
+    xact_id = sbi_xact->id;
 
     sbi_object_id = sbi_xact->sbi_object_id;
     ogs_assert(sbi_object_id >= OGS_MIN_POOL_ID &&
             sbi_object_id <= OGS_MAX_POOL_ID);
 
-    discovery_option = sbi_xact->discovery_option;
+    /*
+     * The transaction owns discovery_option, and ogs_sbi_xact_remove()
+     * frees it. Snapshot the only field that is still needed after the
+     * transaction is released.
+     */
+    if (sbi_xact->discovery_option)
+        guami_presence = sbi_xact->discovery_option->guami_presence;
 
     if (sbi_xact->user_data) {
         amf_sbi_xact_ctx_t *ctx = sbi_xact->user_data;
@@ -301,8 +344,32 @@ void amf_nnrf_handle_failed_amf_discovery(
                 amf_ue->nas.message_type,
                 amf_ue->nas.registration.value);
 
+        if (AMF_AUTH_XACT_STATE(service_name, state)) {
+            if (amf_ue->confirmation_for_5g_aka.xact_id != xact_id)
+                break;
+            amf_ue->confirmation_for_5g_aka.xact_id = OGS_INVALID_POOL_ID;
+            if (!OGS_FSM_CHECK(&amf_ue->sm, gmm_state_authentication))
+                break;
+            CLEAR_5G_AKA_PENDING(amf_ue);
+            if (AMF_AUTH_FAILURE_REPORT(state)) {
+                amf_event_t e = { 0 };
+
+                e.h.id = AMF_EVENT_5GMM_AUTH_FAILURE_REPORT_TIMEOUT;
+                e.h.sbi.state = state;
+                e.amf_ue_id = amf_ue->id;
+                ogs_fsm_dispatch(&amf_ue->sm, &e);
+                break;
+            }
+            /* Vector and normal confirmation timeouts use the SBI 504 path. */
+        }
+
+        if (service_name == OpenAPI_service_name_n5g_eir_eic) {
+            amf_n5geir_eic_handle_discovery_failure(amf_ue);
+            break;
+        }
+
         if (amf_nnrf_try_old_amf_discovery_fallback(
-                amf_ue, requester_nf_type, discovery_option))
+                amf_ue, requester_nf_type, guami_presence))
             break;
 
         if (amf_ue->nas.message_type ==
@@ -333,6 +400,28 @@ void amf_nnrf_handle_failed_amf_discovery(
 
         ogs_error("[%s:%s:%d:%d] Cannot receive SBI message",
                 amf_ue->supi, amf_ue->suci, sess->psi, sess->pti);
+
+        if (state == AMF_RELEASE_SM_CONTEXT_AUTHENTICATED_REGISTRATION) {
+            amf_sbi_fail_registration_session_release(amf_ue,
+                    ran_ue_find_by_id(ran_ue_id),
+                    OGS_SBI_HTTP_STATUS_GATEWAY_TIMEOUT);
+            break;
+        }
+
+        if (state == AMF_UPDATE_SM_CONTEXT_STALE_USER_PLANE) {
+            /*
+             * [Issue #4741]
+             *
+             * The UE is not waiting on this one. ran_ue_id names the NG
+             * context it is using now, and telling that connection about a
+             * failed cleanup of an NG context that is already gone would
+             * disturb a session that is working. The cleanup is
+             * best-effort and is not retried.
+             */
+            ogs_error("[%s:%d] Stale user plane deactivation timed out",
+                    amf_ue->supi, sess->psi);
+            break;
+        }
 
         amf_nnrf_send_session_failure_to_ran(amf_ue, sess, ran_ue_id);
         break;

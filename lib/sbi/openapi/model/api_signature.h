@@ -8,7 +8,7 @@
 #define _OpenAPI_api_signature_H_
 
 #include <string.h>
-#include "../external/cJSON.h"
+#include "third-party/cjson/cJSON.h"
 #include "../include/list.h"
 #include "../include/keyValuePair.h"
 #include "../include/binary.h"
@@ -20,11 +20,13 @@ extern "C" {
 #endif
 
 struct OpenAPI_api_signature_s {
-    char *callback_type;
+    char *uri;
+    struct OpenAPI_callback_name_s *callback_name;
 };
 
 OpenAPI_api_signature_t *OpenAPI_api_signature_create(
-    char *callback_type
+    char *uri,
+    OpenAPI_callback_name_t *callback_name
 );
 void OpenAPI_api_signature_free(OpenAPI_api_signature_t *api_signature);
 OpenAPI_api_signature_t *OpenAPI_api_signature_parseFromJSON(cJSON *api_signatureJSON);

@@ -51,6 +51,7 @@ static bool nudr_validate_imsi_supi(
     }
 
     if (ogs_imsi_bcd_is_valid(value) == false) {
+        ogs_error("Invalid IMSI SUPI [%s]", supi);
         ogs_assert(true ==
             ogs_sbi_server_send_error(stream, OGS_SBI_HTTP_STATUS_BAD_REQUEST,
                 recvmsg, "Invalid SUPI", supi, NULL));
@@ -193,6 +194,7 @@ bool udr_nudr_dr_handle_subscription_authentication(
                     sqn_ms, sizeof(sqn_ms));
             sqn = ogs_buffer_to_uint64(sqn_ms, OGS_SQN_LEN);
 
+            /* The UDM supplied the next SQN in the replace operation. */
             rv = ogs_dbi_update_sqn(supi, sqn);
             if (rv != OGS_OK) {
                 ogs_fatal("[%s] Cannot update SQN", supi);
@@ -200,16 +202,6 @@ bool udr_nudr_dr_handle_subscription_authentication(
                     ogs_sbi_server_send_error(stream,
                         OGS_SBI_HTTP_STATUS_INTERNAL_SERVER_ERROR,
                         recvmsg, "Cannot update SQN", supi, NULL));
-                return false;
-            }
-
-            rv = ogs_dbi_increment_sqn(supi);
-            if (rv != OGS_OK) {
-                ogs_fatal("[%s] Cannot increment SQN", supi);
-                ogs_assert(true ==
-                    ogs_sbi_server_send_error(stream,
-                        OGS_SBI_HTTP_STATUS_INTERNAL_SERVER_ERROR,
-                        recvmsg, "Cannot increment SQN", supi, NULL));
                 return false;
             }
 
@@ -249,16 +241,9 @@ bool udr_nudr_dr_handle_subscription_authentication(
                 return false;
             }
 
+            /* The SQN was advanced at vector issuance. Recording or
+             * removing the authentication result must not advance it again. */
             memset(&sendmsg, 0, sizeof(sendmsg));
-            rv = ogs_dbi_increment_sqn(supi);
-            if (rv != OGS_OK) {
-                ogs_fatal("[%s] Cannot increment SQN", supi);
-                ogs_assert(true ==
-                    ogs_sbi_server_send_error(stream,
-                        OGS_SBI_HTTP_STATUS_INTERNAL_SERVER_ERROR,
-                        recvmsg, "Cannot increment SQN", supi, NULL));
-                return false;
-            }
 
             response = ogs_sbi_build_response(
                     &sendmsg, OGS_SBI_HTTP_STATUS_NO_CONTENT);
@@ -584,12 +569,6 @@ bool udr_nudr_dr_handle_subscription_provisioned(
         goto cleanup;
     }
 
-    if (!subscription_data.ambr.uplink && !subscription_data.ambr.downlink) {
-        strerror = ogs_msprintf("[%s] No UE-AMBR", supi);
-        status = OGS_SBI_HTTP_STATUS_NOT_FOUND;
-        goto cleanup;
-    }
-
     if (recvmsg->h.resource.component[4]) {
         SWITCH(recvmsg->h.resource.component[4])
         CASE(OGS_SBI_RESOURCE_NAME_AM_DATA)
@@ -670,6 +649,20 @@ bool udr_nudr_dr_handle_subscription_provisioned(
             processGpsi = true;
             processUeAmbr = true;
             processNssai = true;
+        }
+
+        /*
+         * UE-AMBR is only meaningful for Access and Mobility
+         * subscription data. Checking it before the dataset dispatch
+         * rejected SMF Selection and Session Management queries of
+         * subscribers without UE-AMBR with 404 as well.
+         */
+        if (processUeAmbr &&
+            !subscription_data.ambr.uplink &&
+            !subscription_data.ambr.downlink) {
+            strerror = ogs_msprintf("[%s] No UE-AMBR", supi);
+            status = OGS_SBI_HTTP_STATUS_NOT_FOUND;
+            goto cleanup;
         }
 
         if (processGpsi) {
@@ -1350,14 +1343,14 @@ bool udr_nudr_dr_handle_policy_data(
     CASE(OGS_SBI_RESOURCE_NAME_UES)
         char *supi = recvmsg->h.resource.component[2];
 
-        if (!supi) {
-            strerror = ogs_msprintf("No SUPI");
+        if (ogs_supi_is_valid(supi) == false) {
+            strerror = ogs_msprintf("Invalid SUPI");
             status = OGS_SBI_HTTP_STATUS_BAD_REQUEST;
             goto cleanup;
         }
 
-        if (strncmp(supi,
-                OGS_ID_SUPI_TYPE_IMSI, strlen(OGS_ID_SUPI_TYPE_IMSI)) != 0) {
+        if (strncmp(supi, OGS_ID_SUPI_TYPE_IMSI "-",
+                sizeof(OGS_ID_SUPI_TYPE_IMSI "-") - 1) != 0) {
             strerror = ogs_msprintf("[%s] Unknown SUPI Type", supi);
             status = OGS_SBI_HTTP_STATUS_FORBIDDEN;
             goto cleanup;

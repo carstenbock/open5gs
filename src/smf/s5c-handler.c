@@ -125,6 +125,9 @@ uint8_t smf_s5c_handle_create_session_request(
     if (req->sender_f_teid_for_control_plane.presence == 0) {
         ogs_error("No TEID");
         cause_value = OGS_GTP2_CAUSE_MANDATORY_IE_MISSING;
+    } else if (ogs_gtp2_f_teid_check(
+                &req->sender_f_teid_for_control_plane) != OGS_OK) {
+        cause_value = OGS_GTP2_CAUSE_MANDATORY_IE_INCORRECT;
     }
     if (req->bearer_contexts_to_be_created[0].presence == 0) {
         ogs_error("No Bearer");
@@ -166,6 +169,9 @@ uint8_t smf_s5c_handle_create_session_request(
                 s5_s8_u_sgw_f_teid.presence == 0) {
             ogs_error("No S5/S8 SGW GTP-U TEID");
             cause_value = OGS_GTP2_CAUSE_MANDATORY_IE_MISSING;
+        } else if (ogs_gtp2_f_teid_check(&req->bearer_contexts_to_be_created[0].
+                    s5_s8_u_sgw_f_teid) != OGS_OK) {
+            cause_value = OGS_GTP2_CAUSE_MANDATORY_IE_INCORRECT;
         }
         if (req->user_location_information.presence == 0) {
             ogs_error("No UE Location Information");
@@ -181,6 +187,9 @@ uint8_t smf_s5c_handle_create_session_request(
                 s2b_u_epdg_f_teid_5.presence == 0) {
             ogs_error("No S2b ePDG GTP-U TEID");
             cause_value = OGS_GTP2_CAUSE_MANDATORY_IE_MISSING;
+        } else if (ogs_gtp2_f_teid_check(&req->bearer_contexts_to_be_created[0].
+                    s2b_u_epdg_f_teid_5) != OGS_OK) {
+            cause_value = OGS_GTP2_CAUSE_MANDATORY_IE_INCORRECT;
         }
         break;
     default:
@@ -205,8 +214,11 @@ uint8_t smf_s5c_handle_create_session_request(
         smf_ue->msisdn_len = req->msisdn.len;
         if (smf_ue->msisdn_len > 0) {
             memcpy(smf_ue->msisdn, req->msisdn.data, smf_ue->msisdn_len);
-            ogs_buffer_to_bcd(
-                smf_ue->msisdn, smf_ue->msisdn_len, smf_ue->msisdn_bcd);
+            if (!ogs_buffer_to_bcd(smf_ue->msisdn, smf_ue->msisdn_len,
+                        smf_ue->msisdn_bcd, sizeof(smf_ue->msisdn_bcd))) {
+                ogs_error("Invalid MSISDN [len:%d]", smf_ue->msisdn_len);
+                return OGS_GTP2_CAUSE_MANDATORY_IE_INCORRECT;
+            }
         }
     }
 
@@ -219,13 +231,12 @@ uint8_t smf_s5c_handle_create_session_request(
 
     if (sess->gtp_rat_type == OGS_GTP2_RAT_TYPE_EUTRAN) {
         /* User Location Inforation is mandatory only for E-UTRAN */
-        ogs_assert(req->user_location_information.presence);
         if (req->user_location_information.presence == 0) {
             ogs_error("No User Location Information(ULI)");
             return OGS_GTP2_CAUSE_MANDATORY_IE_MISSING;
         }
         decoded = ogs_gtp2_parse_uli(&uli, &req->user_location_information);
-        if (req->user_location_information.len != decoded) {
+        if (decoded == 0 || req->user_location_information.len != decoded) {
             ogs_error("Invalid User Location Information(ULI)");
             return OGS_GTP2_CAUSE_MANDATORY_IE_INCORRECT;
         }
@@ -542,8 +553,11 @@ uint8_t smf_s5c_handle_create_session_request(
     if (req->msisdn.presence && req->msisdn.len && req->msisdn.data) {
         smf_ue->msisdn_len = ogs_min(req->msisdn.len, OGS_MAX_MSISDN_LEN);
         memcpy(smf_ue->msisdn, req->msisdn.data, smf_ue->msisdn_len);
-        ogs_buffer_to_bcd(smf_ue->msisdn,
-                smf_ue->msisdn_len, smf_ue->msisdn_bcd);
+        if (!ogs_buffer_to_bcd(smf_ue->msisdn, smf_ue->msisdn_len,
+                    smf_ue->msisdn_bcd, sizeof(smf_ue->msisdn_bcd))) {
+            ogs_error("Invalid MSISDN [len:%d]", smf_ue->msisdn_len);
+            return OGS_GTP2_CAUSE_MANDATORY_IE_INCORRECT;
+        }
     }
 
     /* Set IMEI(SV) */
@@ -551,8 +565,11 @@ uint8_t smf_s5c_handle_create_session_request(
         smf_ue->imeisv_len = ogs_min(req->me_identity.len, OGS_MAX_IMEISV_LEN);
         memcpy(smf_ue->imeisv,
             (uint8_t*)req->me_identity.data, smf_ue->imeisv_len);
-        ogs_buffer_to_bcd(
-            smf_ue->imeisv, smf_ue->imeisv_len, smf_ue->imeisv_bcd);
+        if (!ogs_buffer_to_bcd(smf_ue->imeisv, smf_ue->imeisv_len,
+                    smf_ue->imeisv_bcd, sizeof(smf_ue->imeisv_bcd))) {
+            ogs_error("Invalid IMEI(SV) [len:%d]", smf_ue->imeisv_len);
+            return OGS_GTP2_CAUSE_MANDATORY_IE_INCORRECT;
+        }
     }
 
     /* Set Node Identifier */
@@ -660,6 +677,19 @@ void smf_s5c_handle_modify_bearer_request(
      * Check Session Context
      ************************/
     cause_value = OGS_GTP2_CAUSE_REQUEST_ACCEPTED;
+
+    if (req->sender_f_teid_for_control_plane.presence == 1 &&
+        ogs_gtp2_f_teid_check(&req->sender_f_teid_for_control_plane) !=
+            OGS_OK)
+        cause_value = OGS_GTP2_CAUSE_MANDATORY_IE_INCORRECT;
+    for (i = 0; i < OGS_BEARER_PER_UE &&
+            req->bearer_contexts_to_be_modified[i].presence; i++) {
+        if (req->bearer_contexts_to_be_modified[i].
+                s4_u_sgsn_f_teid.presence &&
+            ogs_gtp2_f_teid_check(&req->bearer_contexts_to_be_modified[i].
+                s4_u_sgsn_f_teid) != OGS_OK)
+            cause_value = OGS_GTP2_CAUSE_MANDATORY_IE_INCORRECT;
+    }
 
     if (!sess) {
         ogs_error("No Context");
@@ -771,13 +801,15 @@ void smf_s5c_handle_modify_bearer_request(
 
         /* Need to modify SGW-S5U */
         pfcp_xact = ogs_pfcp_xact_local_create(
-                        sess->pfcp_node, pfcp_sess_timeout, sess);
+                        sess->pfcp_node, pfcp_sess_timeout,
+                        OGS_UINT_TO_POINTER(sess->id));
         ogs_assert(pfcp_xact);
 
         pfcp_xact->epc = true; /* EPC PFCP transaction */
         pfcp_xact->assoc_xact_id = gtp_xact->id;
         pfcp_xact->modify_flags =
-            flags|OGS_PFCP_MODIFY_DL_ONLY|OGS_PFCP_MODIFY_ACTIVATE;
+            flags|OGS_PFCP_MODIFY_SESSION|
+            OGS_PFCP_MODIFY_DL_ONLY|OGS_PFCP_MODIFY_ACTIVATE;
 
         pfcp_xact->gtp_pti = OGS_NAS_PROCEDURE_TRANSACTION_IDENTITY_UNASSIGNED;
         pfcp_xact->gtp_cause = OGS_GTP2_CAUSE_UNDEFINED_VALUE;
@@ -805,15 +837,16 @@ void smf_s5c_handle_modify_bearer_request(
 
         if (indication && indication->handover_indication) {
             /*
-             * Handover from Non-3GPP (WLAN/ePDG) to 3GPP (E-UTRAN): deactivate
-             * the old WLAN PDN leg. Best-effort only -- the WLAN session may
-             * legitimately be absent (already released by the ePDG, or lost
-             * across an SMF restart), so a failed lookup must NOT abort the
-             * whole daemon (the original ogs_assert() turned a single UE's
-             * missing peer session into a full SMF SIGABRT + crash loop that
-             * dropped every subscriber). The Modify Bearer Response was already
-             * sent above, so the handover to 3GPP has completed regardless
-             * (TS 23.402 clause 8).
+             * Handover from Non-3GPP to 3GPP.
+             *
+             * The Modify Bearer Response has already been sent above, so the
+             * 3GPP-side procedure has completed successfully. Deactivating the
+             * old WLAN session is a best-effort cleanup step: if no matching
+             * WLAN session exists (e.g. it was already released, lost across
+             * an SMF restart, or the handover indication was set without a
+             * Non-3GPP leg), there is simply nothing to deactivate. A peer
+             * must not be able to crash the SMF by triggering this path, so
+             * log and continue instead of asserting (TS 23.402 clause 8).
              */
             rv = smf_epc_pfcp_send_deactivation(sess,
                     OGS_GTP2_CAUSE_ACCESS_CHANGED_FROM_NON_3GPP_TO_3GPP);
@@ -894,6 +927,11 @@ void smf_s5c_handle_create_bearer_response(
 
     if (rsp->bearer_contexts.s5_s8_u_pgw_f_teid.presence &&
         rsp->bearer_contexts.s5_s8_u_sgw_f_teid.presence) {
+        if (ogs_gtp2_f_teid_check(
+                &rsp->bearer_contexts.s5_s8_u_pgw_f_teid) != OGS_OK ||
+            ogs_gtp2_f_teid_check(
+                &rsp->bearer_contexts.s5_s8_u_sgw_f_teid) != OGS_OK)
+            cause_value = OGS_GTP2_CAUSE_MANDATORY_IE_INCORRECT;
         if (rsp->bearer_contexts.s5_s8_u_pgw_f_teid.presence)
             pgw_s5u_teid = rsp->bearer_contexts.s5_s8_u_pgw_f_teid.data;
         if (rsp->bearer_contexts.s5_s8_u_sgw_f_teid.presence)
@@ -902,6 +940,11 @@ void smf_s5c_handle_create_bearer_response(
 
     if (rsp->bearer_contexts.s2b_u_pgw_f_teid.presence &&
         rsp->bearer_contexts.s2b_u_epdg_f_teid_8.presence) {
+        if (ogs_gtp2_f_teid_check(
+                &rsp->bearer_contexts.s2b_u_pgw_f_teid) != OGS_OK ||
+            ogs_gtp2_f_teid_check(
+                &rsp->bearer_contexts.s2b_u_epdg_f_teid_8) != OGS_OK)
+            cause_value = OGS_GTP2_CAUSE_MANDATORY_IE_INCORRECT;
         if (rsp->bearer_contexts.s2b_u_pgw_f_teid.presence)
             pgw_s5u_teid = rsp->bearer_contexts.s2b_u_pgw_f_teid.data;
         if (rsp->bearer_contexts.s2b_u_epdg_f_teid_8.presence)
@@ -1465,6 +1508,32 @@ void smf_s5c_handle_bearer_resource_command(
 
     ogs_assert(cmd->traffic_aggregate_description.len == decoded);
 
+    /*
+     * TS 24.008 10.5.6.12: packet filter direction 00 is a pre Rel-7 TFT
+     * filter and names no traffic direction.  smf_bearer_tft_update() can
+     * only place downlink, uplink or bi-directional filters and aborts the
+     * SMF on anything else, so reject the request before any packet filter
+     * of the bearer is created or changed.
+     */
+    if (tft.code == OGS_GTP2_TFT_CODE_CREATE_NEW_TFT ||
+        tft.code == OGS_GTP2_TFT_CODE_ADD_PACKET_FILTERS_TO_EXISTING_TFT ||
+        tft.code == OGS_GTP2_TFT_CODE_REPLACE_PACKET_FILTERS_IN_EXISTING) {
+        for (i = 0; i < tft.num_of_packet_filter &&
+                    i < OGS_MAX_NUM_OF_FLOW_IN_GTP; i++) {
+            if (tft.pf[i].direction != OGS_FLOW_DOWNLINK_ONLY &&
+                tft.pf[i].direction != OGS_FLOW_UPLINK_ONLY &&
+                tft.pf[i].direction != OGS_FLOW_BIDIRECTIONAL) {
+                ogs_error("Unsupported packet filter direction [%d]",
+                        tft.pf[i].direction);
+                ogs_gtp2_send_error_message(
+                    xact, get_sender_f_teid(sess, sender_f_teid),
+                    OGS_GTP2_BEARER_RESOURCE_FAILURE_INDICATION_TYPE,
+                    OGS_GTP2_CAUSE_SEMANTIC_ERRORS_IN_PACKET_FILTER);
+                return;
+            }
+        }
+    }
+
     if (tft.code == OGS_GTP2_TFT_CODE_NO_TFT_OPERATION) {
         /* No operation */
     } else if (tft.code == OGS_GTP2_TFT_CODE_DELETE_EXISTING_TFT) {
@@ -1522,11 +1591,19 @@ void smf_s5c_handle_bearer_resource_command(
                     ogs_ipfw_copy_and_swap(&tmp, &pf->ipfw_rule);
                     pf->flow_description =
                         ogs_ipfw_encode_flow_description(&tmp);
-                    ogs_assert(pf->flow_description);
                 } else {
                     pf->flow_description =
                         ogs_ipfw_encode_flow_description(&pf->ipfw_rule);
-                    ogs_assert(pf->flow_description);
+                }
+
+                if (!pf->flow_description) {
+                    ogs_error("Invalid packet filter [pf-direction=%d]",
+                            pf->direction);
+                    ogs_gtp2_send_error_message(
+                        xact, get_sender_f_teid(sess, sender_f_teid),
+                        OGS_GTP2_BEARER_RESOURCE_FAILURE_INDICATION_TYPE,
+                        OGS_GTP2_CAUSE_SEMANTIC_ERRORS_IN_PACKET_FILTER);
+                    return;
                 }
 
                 tft_update = 1;
@@ -1543,7 +1620,20 @@ void smf_s5c_handle_bearer_resource_command(
             pf = smf_pf_find_by_identifier(bearer, tft.pf[i].identifier+1);
             if (!pf)
                 pf = smf_pf_add(bearer);
-            ogs_assert(pf);
+            /*
+             * The per-bearer packet filter pool is limited to
+             * OGS_MAX_NUM_OF_FLOW_IN_BEARER. The UE can exceed it by adding
+             * packet filters that do not match an existing identifier,
+             * so this is UE input, not an internal error.
+             */
+            if (!pf) {
+                ogs_error("Overflow: PacketFilter in Bearer");
+                ogs_gtp2_send_error_message(
+                    xact, get_sender_f_teid(sess, sender_f_teid),
+                    OGS_GTP2_BEARER_RESOURCE_FAILURE_INDICATION_TYPE,
+                    OGS_GTP2_CAUSE_NO_RESOURCES_AVAILABLE);
+                return;
+            }
 
             if (reconfigure_packet_filter(pf, &tft, i) < 0) {
                 ogs_gtp2_send_error_message(
@@ -1592,11 +1682,19 @@ void smf_s5c_handle_bearer_resource_command(
                 ogs_ipfw_copy_and_swap(&tmp, &pf->ipfw_rule);
                 pf->flow_description =
                     ogs_ipfw_encode_flow_description(&tmp);
-                ogs_assert(pf->flow_description);
             } else {
                 pf->flow_description =
                     ogs_ipfw_encode_flow_description(&pf->ipfw_rule);
-                ogs_assert(pf->flow_description);
+            }
+
+            if (!pf->flow_description) {
+                ogs_error("Invalid packet filter [pf-direction=%d]",
+                        pf->direction);
+                ogs_gtp2_send_error_message(
+                    xact, get_sender_f_teid(sess, sender_f_teid),
+                    OGS_GTP2_BEARER_RESOURCE_FAILURE_INDICATION_TYPE,
+                    OGS_GTP2_CAUSE_SEMANTIC_ERRORS_IN_PACKET_FILTER);
+                return;
             }
 
             tft_update = 1;
@@ -1631,12 +1729,25 @@ void smf_s5c_handle_bearer_resource_command(
             return;
         }
 
-        bearer->qos.mbr.uplink = flow_qos.ul_mbr;
-        bearer->qos.mbr.downlink = flow_qos.dl_mbr;
-        bearer->qos.gbr.uplink = flow_qos.ul_gbr;
-        bearer->qos.gbr.downlink = flow_qos.dl_gbr;
+        /*
+         * TS 24.301 6.5.4.2: the UE can change the GBR of a GBR bearer
+         * only, and TS 29.274 8.15: a non-GBR bearer has no bit rates.
+         * So ignore the Flow QoS for a non-GBR bearer. This includes
+         * the default bearer, whose QoS is in sess->session.qos and
+         * not in bearer->qos.
+         */
+        if (bearer->qos.mbr.downlink || bearer->qos.mbr.uplink ||
+            bearer->qos.gbr.downlink || bearer->qos.gbr.uplink) {
+            bearer->qos.mbr.uplink = flow_qos.ul_mbr;
+            bearer->qos.mbr.downlink = flow_qos.dl_mbr;
+            bearer->qos.gbr.uplink = flow_qos.ul_gbr;
+            bearer->qos.gbr.downlink = flow_qos.dl_gbr;
 
-        qos_update = 1;
+            qos_update = 1;
+        } else {
+            ogs_warn("Ignore Flow QoS for non-GBR bearer [EBI:%d]",
+                    bearer->ebi);
+        }
     }
 
     if (tft_update == 0 && tft_delete == 0 && qos_update == 0) {

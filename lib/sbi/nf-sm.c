@@ -153,11 +153,19 @@ void ogs_sbi_nf_fsm_fini(ogs_sbi_nf_instance_t *nf_instance)
 
     if (NF_INSTANCE_TYPE_IS_NRF(nf_instance) &&
         OGS_FSM_CHECK(&nf_instance->sm, ogs_sbi_nf_state_registered)) {
-        ogs_assert(true ==
+        ogs_expect(true ==
                 ogs_nnrf_nfm_send_nf_de_register(nf_instance));
     }
 
     ogs_fsm_fini(&nf_instance->sm, &e);
+}
+
+void ogs_sbi_nf_fsm_fini_all(void)
+{
+    ogs_sbi_nf_instance_t *nf_instance = NULL;
+
+    ogs_list_for_each(&ogs_sbi_self()->nf_instance_list, nf_instance)
+        ogs_sbi_nf_fsm_fini(nf_instance);
 }
 
 void ogs_sbi_nf_state_initial(ogs_fsm_t *s, ogs_event_t *e)
@@ -173,16 +181,20 @@ void ogs_sbi_nf_state_initial(ogs_fsm_t *s, ogs_event_t *e)
     ogs_assert(nf_instance);
 
     nf_instance->t_registration_interval = ogs_timer_add(ogs_app()->timer_mgr,
-            ogs_timer_nf_instance_registration_interval, nf_instance);
+            ogs_timer_nf_instance_registration_interval,
+            OGS_UINT_TO_POINTER(nf_instance->pool_id));
     ogs_assert(nf_instance->t_registration_interval);
     nf_instance->t_heartbeat_interval = ogs_timer_add(ogs_app()->timer_mgr,
-            ogs_timer_nf_instance_heartbeat_interval, nf_instance);
+            ogs_timer_nf_instance_heartbeat_interval,
+            OGS_UINT_TO_POINTER(nf_instance->pool_id));
     ogs_assert(nf_instance->t_heartbeat_interval);
     nf_instance->t_no_heartbeat = ogs_timer_add(ogs_app()->timer_mgr,
-            ogs_timer_nf_instance_no_heartbeat, nf_instance);
+            ogs_timer_nf_instance_no_heartbeat,
+            OGS_UINT_TO_POINTER(nf_instance->pool_id));
     ogs_assert(nf_instance->t_no_heartbeat);
     nf_instance->t_validity = ogs_timer_add(ogs_app()->timer_mgr,
-            ogs_timer_nf_instance_validity, nf_instance);
+            ogs_timer_nf_instance_validity,
+            OGS_UINT_TO_POINTER(nf_instance->pool_id));
     ogs_assert(nf_instance->t_validity);
 
     if (NF_INSTANCE_TYPE_IS_NRF(nf_instance)) {
@@ -301,52 +313,6 @@ void ogs_sbi_nf_state_will_register(ogs_fsm_t *s, ogs_event_t *e)
     }
 }
 
-static bool nf_status_subscription_exists(
-        const char *req_nf_instance_id,
-        OpenAPI_nf_type_e nf_type,
-        OpenAPI_service_name_e service_name)
-{
-    ogs_sbi_subscription_data_t *s = NULL;
-    bool same_nf_type = false;
-    bool same_service_name = false;
-    bool nf_type_present = false;
-    bool service_name_present = false;
-
-    ogs_assert(req_nf_instance_id);
-
-    nf_type_present = (nf_type != OpenAPI_nf_type_NULL);
-    service_name_present = (service_name != OpenAPI_service_name_NULL);
-
-    ogs_list_for_each(&ogs_sbi_self()->subscription_data_list, s) {
-        if (!s->req_nf_instance_id)
-            continue;
-
-        if (strcmp(s->req_nf_instance_id, req_nf_instance_id) != 0)
-            continue;
-
-        if (s->flags & OGS_SBI_SUBSCRIPTION_DELETE_SENT)
-            continue;
-
-        same_nf_type = false;
-        same_service_name = false;
-
-        if (nf_type_present &&
-            s->subscr_cond.nf_type != OpenAPI_nf_type_NULL &&
-            s->subscr_cond.nf_type == nf_type)
-            same_nf_type = true;
-
-        if (service_name_present &&
-            s->subscr_cond.service_name &&
-            s->subscr_cond.service_name == service_name)
-            same_service_name = true;
-
-        if (same_nf_type || same_service_name)
-            return true;
-    }
-
-    return false;
-}
-
 void ogs_sbi_nf_state_registered(ogs_fsm_t *s, ogs_event_t *e)
 {
     ogs_sbi_nf_instance_t *nf_instance = NULL;
@@ -381,10 +347,11 @@ void ogs_sbi_nf_state_registered(ogs_fsm_t *s, ogs_event_t *e)
 
             ogs_list_for_each(
                 &ogs_sbi_self()->subscription_spec_list, subscription_spec) {
-                if (nf_status_subscription_exists(
+                if (ogs_sbi_nf_status_subscription_exists(
                             ogs_sbi_self()->nf_instance->id,
                             subscription_spec->subscr_cond.nf_type,
-                            subscription_spec->subscr_cond.service_name)) {
+                            subscription_spec->subscr_cond.service_name,
+                            false)) {
                     ogs_warn("[%s] NF status subscription already exists, skip",
                             ogs_sbi_self()->nf_instance->id);
                     continue;
@@ -508,7 +475,7 @@ void ogs_sbi_nf_state_registered(ogs_fsm_t *s, ogs_event_t *e)
                 ogs_timer_start(nf_instance->t_heartbeat_interval,
                     ogs_time_from_sec(nf_instance->time.heartbeat_interval));
 
-            ogs_assert(true == ogs_nnrf_nfm_send_nf_update(nf_instance));
+            ogs_expect(true == ogs_nnrf_nfm_send_nf_update(nf_instance));
             break;
 
         case OGS_TIMER_NF_INSTANCE_NO_HEARTBEAT:

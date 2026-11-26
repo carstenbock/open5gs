@@ -171,7 +171,7 @@ void test_rx_send_aar_audio(uint8_t **rx_sid,
     /* Set the Destination-Host AVP */
     ret = fd_msg_avp_new(ogs_diam_destination_host, 0, &avp);
     ogs_assert(ret == 0);
-    val.os.data = TEST_PCRF_IDENTITY;
+    val.os.data = (uint8_t *)TEST_PCRF_IDENTITY;
     val.os.len  = strlen(TEST_PCRF_IDENTITY);
     ret = fd_msg_avp_setvalue(avp, &val);
     ogs_assert(ret == 0);
@@ -681,7 +681,7 @@ void test_rx_send_aar_video(uint8_t **rx_sid, test_sess_t *sess, int id_type)
     /* Set the Destination-Host AVP */
     ret = fd_msg_avp_new(ogs_diam_destination_host, 0, &avp);
     ogs_assert(ret == 0);
-    val.os.data = TEST_PCRF_IDENTITY;
+    val.os.data = (uint8_t *)TEST_PCRF_IDENTITY;
     val.os.len  = strlen(TEST_PCRF_IDENTITY);
     ret = fd_msg_avp_setvalue(avp, &val);
     ogs_assert(ret == 0);
@@ -1359,7 +1359,7 @@ void test_rx_send_aar_ctrl(uint8_t **rx_sid, test_sess_t *sess, int id_type)
     /* Set the Destination-Host AVP */
     ret = fd_msg_avp_new(ogs_diam_destination_host, 0, &avp);
     ogs_assert(ret == 0);
-    val.os.data = TEST_PCRF_IDENTITY;
+    val.os.data = (uint8_t *)TEST_PCRF_IDENTITY;
     val.os.len  = strlen(TEST_PCRF_IDENTITY);
     ret = fd_msg_avp_setvalue(avp, &val);
     ogs_assert(ret == 0);
@@ -1949,7 +1949,7 @@ void test_rx_send_str(uint8_t *rx_sid)
     /* Set the Destination-Host AVP */
     ret = fd_msg_avp_new(ogs_diam_destination_host, 0, &avp);
     ogs_assert(ret == 0);
-    val.os.data = TEST_PCRF_IDENTITY;
+    val.os.data = (uint8_t *)TEST_PCRF_IDENTITY;
     val.os.len  = strlen(TEST_PCRF_IDENTITY);
     ret = fd_msg_avp_setvalue(avp, &val);
     ogs_assert(ret == 0);

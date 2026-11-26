@@ -19,6 +19,33 @@
 
 #include "sbi-path.h"
 
+static bool should_defer_tls_negotiation(
+        const OpenAPI_sec_negotiate_req_data_t *request)
+{
+    OpenAPI_lnode_t *node = NULL;
+    bool tls = false;
+
+    if (ogs_local_conf()->num_of_serving_plmn_id ||
+        !sepp_self()->security_capability.tls)
+        return false;
+
+    OpenAPI_list_for_each(request->supported_sec_capability_list, node) {
+        OpenAPI_security_capability_e capability = (uintptr_t)node->data;
+
+        /*
+         * Same precedence as
+         * sepp_n32c_handshake_handle_security_capability_request():
+         * NONE takes precedence over TLS.
+         */
+        if (capability == OpenAPI_security_capability_NONE)
+            return false;
+        if (capability == OpenAPI_security_capability_TLS)
+            tls = true;
+    }
+
+    return tls;
+}
+
 void sepp_state_initial(ogs_fsm_t *s, sepp_event_t *e)
 {
     sepp_sm_debug(e);
@@ -40,6 +67,7 @@ void sepp_state_operational(ogs_fsm_t *s, sepp_event_t *e)
     int rv;
 
     sepp_node_t *sepp_node = NULL;
+    bool node_allocation_failed = false;
 
     ogs_sbi_stream_t *stream = NULL;
     ogs_pool_id_t stream_id = OGS_INVALID_POOL_ID;
@@ -151,18 +179,71 @@ void sepp_state_operational(ogs_fsm_t *s, sepp_event_t *e)
             CASE(OGS_SBI_RESOURCE_NAME_EXCHANGE_CAPABILITY)
                 SWITCH(message.h.method)
                 CASE(OGS_SBI_HTTP_METHOD_POST)
-                    if (message.SecNegotiateReqData &&
-                        message.SecNegotiateReqData->sender) {
-                        sepp_node = sepp_node_find_by_receiver(
+                    if (!message.SecNegotiateReqData ||
+                        !message.SecNegotiateReqData->sender)
+                        break; /* Answer with error below */
+                    /*
+                     * The JSON sender selects the peer to update.
+                     * Check that the verified client certificate covers
+                     * this name before looking up or creating the peer.
+                     * This prevents a client from modifying the state of
+                     * a peer identity its certificate does not cover.
+                     * PLMN authorization is a separate policy.
+                     */
+                    if (server->verify_client &&
+                        !ogs_sbi_server_verify_client_identity(stream,
+                            message.SecNegotiateReqData->sender)) {
+                        ogs_error("Certificate identity mismatch Sender [%s]",
                                 message.SecNegotiateReqData->sender);
-                        if (!sepp_node) {
-                            sepp_node = sepp_node_add(
-                                message.SecNegotiateReqData->sender);
-                            ogs_assert(sepp_node);
-
-                            sepp_handshake_fsm_init(sepp_node, false);
-                        }
+                        ogs_assert(true == ogs_sbi_server_send_error(stream,
+                                    OGS_SBI_HTTP_STATUS_FORBIDDEN, &message,
+                                    "Certificate identity mismatch",
+                                    message.SecNegotiateReqData->sender,
+                                    NULL));
+                        /*
+                         * Return before peer dispatch; the common message
+                         * cleanup below will not run on this path.
+                         */
+                        ogs_sbi_message_free(&message);
+                        return;
                     }
+
+                    /*
+                     * The TLS response carries our serving PLMN list, which
+                     * is learned from NRF unless configured locally. Until
+                     * it is known, let the peer retry instead of
+                     * establishing with an empty list.
+                     */
+                    if (should_defer_tls_negotiation(
+                            message.SecNegotiateReqData)) {
+                        ogs_warn("Serving PLMN list not available yet "
+                                "Sender [%s]",
+                                message.SecNegotiateReqData->sender);
+                        ogs_assert(true == ogs_sbi_server_send_error(stream,
+                                    OGS_SBI_HTTP_STATUS_SERVICE_UNAVAILABLE,
+                                    &message, "Serving PLMN list unavailable",
+                                    message.SecNegotiateReqData->sender,
+                                    NULL));
+                        ogs_sbi_message_free(&message);
+                        return;
+                    }
+
+                    sepp_node = sepp_node_find_by_receiver(
+                            message.SecNegotiateReqData->sender);
+                    if (!sepp_node)
+                        sepp_node = sepp_node_add(
+                                message.SecNegotiateReqData->sender);
+                    if (!sepp_node) {
+                        node_allocation_failed = true;
+                        break; /* Answer with error below */
+                    }
+                    /*
+                     * Since FSM initialization only needs to be done once
+                     * at the beginning, it only performs initialization
+                     * when the state variable(OGS_FSM_STATE()) is NULL.
+                     */
+                    if (!OGS_FSM_STATE(&sepp_node->sm))
+                        sepp_handshake_fsm_init(sepp_node, false);
                     break;
 
                 DEFAULT
@@ -185,11 +266,22 @@ void sepp_state_operational(ogs_fsm_t *s, sepp_event_t *e)
             END
 
             if (!sepp_node) {
-                ogs_error("Not found [%s]", message.h.method);
-                ogs_assert(true ==
-                    ogs_sbi_server_send_error(
-                        stream, OGS_SBI_HTTP_STATUS_NOT_FOUND,
-                        &message, "Not found", message.h.method, NULL));
+                if (node_allocation_failed) {
+                    ogs_error("Cannot allocate SEPP peer context [%s]",
+                            message.SecNegotiateReqData->sender);
+                    ogs_assert(true ==
+                        ogs_sbi_server_send_error(stream,
+                            OGS_SBI_HTTP_STATUS_INTERNAL_SERVER_ERROR,
+                            &message, "Insufficient resources",
+                            "Cannot allocate SEPP peer context",
+                            "INSUFFICIENT_RESOURCES"));
+                } else {
+                    ogs_error("Not found [%s]", message.h.method);
+                    ogs_assert(true ==
+                        ogs_sbi_server_send_error(
+                            stream, OGS_SBI_HTTP_STATUS_NOT_FOUND,
+                            &message, "Not found", message.h.method, NULL));
+                }
                 break;
             }
 
@@ -246,32 +338,14 @@ void sepp_state_operational(ogs_fsm_t *s, sepp_event_t *e)
                 nf_instance = e->h.sbi.data;
                 ogs_assert(nf_instance);
 
-    /*
-     * Guard against dispatching to an FSM that may have been finalized
-     * by an asynchronous shutdown triggered by SIGTERM.
-     *
-     * In init.c’s event_termination(), which can be invoked asynchronously
-     * when the process receives SIGTERM, we iterate over all NF instances:
-     *     ogs_list_for_each(&ogs_sbi_self()->nf_instance_list, nf_instance)
-     *         ogs_sbi_nf_fsm_fini(nf_instance);
-     * and call ogs_fsm_fini() on each instance’s FSM. That finalizes the FSM
-     * and its state is reset to zero.
-     *
-     * After event_termination(), any incoming SBI response—such as an NRF
-     * client callback arriving after deregistration—would otherwise be
-     * dispatched into a dead FSM and trigger an assertion failure.
-     *
-     * To avoid this, we check OGS_FSM_STATE(&nf_instance->sm):
-     *   - If non-zero, the FSM is still active and can safely handle the event.
-     *   - If zero, the FSM has already been finalized by event_termination(),
-     *     so we log and drop the event to allow graceful shutdown.
-     */
+                /* Dispatch only while the NF instance FSM is active. */
                 old_state = OGS_FSM_STATE(&nf_instance->sm);
                 if (old_state) {
                     e->h.sbi.message = &message;
                     ogs_fsm_dispatch(&nf_instance->sm, e);
-                } else
-                    ogs_error("NF instance FSM has been finalized");
+                } else {
+                    ogs_warn("NF instance FSM has been finalized");
+                }
 
             /*
              * The SEPP on the H-PLMN should send a n32c-handshake message
@@ -293,65 +367,31 @@ void sepp_state_operational(ogs_fsm_t *s, sepp_event_t *e)
 
                     /* Initialize SEPP Peer List */
                     ogs_list_for_each(&sepp_self()->peer_list, sepp_node) {
+                        /*
+                         * A peer added by an inbound request has no client
+                         * and cannot send the N32-c request.
+                         */
+                        if (!sepp_node->client)
+                            continue;
 
                         /*
                          * Since FSM initialization only needs to be done once
                          * at the beginning, it only performs initialization
                          * when the state variable(OGS_FSM_STATE()) is NULL.
                          */
-                        if (!OGS_FSM_STATE(&sepp_node->sm))
+                        if (!OGS_FSM_STATE(&sepp_node->sm)) {
                             sepp_handshake_fsm_init(sepp_node, true);
+                        } else {
+                            /* Make sure re-establishment is enabled if previously was initialized as server-side: */
+                            sepp_handshake_fsm_try_to_establish(sepp_node);
+                        }
                     }
                 }
                 break;
 
             CASE(OGS_SBI_RESOURCE_NAME_SUBSCRIPTIONS)
-                subscription_data = e->h.sbi.data;
-                ogs_assert(subscription_data);
-
-                SWITCH(message.h.method)
-                CASE(OGS_SBI_HTTP_METHOD_POST)
-                    if (message.res_status == OGS_SBI_HTTP_STATUS_CREATED ||
-                        message.res_status == OGS_SBI_HTTP_STATUS_OK) {
-                        ogs_nnrf_nfm_handle_nf_status_subscribe(
-                                subscription_data, &message);
-                    } else {
-                        ogs_error("HTTP response error : %d",
-                                message.res_status);
-                    }
-                    break;
-
-                CASE(OGS_SBI_HTTP_METHOD_PATCH)
-                    if (message.res_status == OGS_SBI_HTTP_STATUS_OK ||
-                        message.res_status == OGS_SBI_HTTP_STATUS_NO_CONTENT) {
-                        ogs_nnrf_nfm_handle_nf_status_update(
-                                subscription_data, &message);
-                    } else {
-                        ogs_error("[%s] HTTP response error [%d]",
-                                subscription_data->id ?
-                                    subscription_data->id : "Unknown",
-                                message.res_status);
-                    }
-                    break;
-
-                CASE(OGS_SBI_HTTP_METHOD_DELETE)
-                    if (message.res_status == OGS_SBI_HTTP_STATUS_NO_CONTENT)
-                        ogs_info("[%s] Subscription deleted",
-                                subscription_data->id ?
-                                    subscription_data->id : "Unknown");
-                    else
-                        ogs_error("[%s] HTTP response error [%d]",
-                                subscription_data->id ?
-                                    subscription_data->id : "Unknown",
-                                message.res_status);
-
-                    ogs_sbi_subscription_data_remove(subscription_data);
-                    break;
-
-                DEFAULT
-                    ogs_error("Invalid HTTP method [%s]", message.h.method);
-                    ogs_assert_if_reached();
-                END
+                ogs_nnrf_nfm_handle_nf_status_subscription_response(
+                        &message, e->h.sbi.data);
                 break;
 
             DEFAULT
@@ -409,9 +449,15 @@ void sepp_state_operational(ogs_fsm_t *s, sepp_event_t *e)
         case OGS_TIMER_NF_INSTANCE_HEARTBEAT_INTERVAL:
         case OGS_TIMER_NF_INSTANCE_NO_HEARTBEAT:
         case OGS_TIMER_NF_INSTANCE_VALIDITY:
-            nf_instance = e->h.sbi.data;
-            ogs_assert(nf_instance);
+            nf_instance = ogs_sbi_nf_instance_find_by_pool_id(
+                    OGS_POINTER_TO_UINT(e->h.sbi.data));
+            if (!nf_instance) {
+                ogs_error("NF Instance has already been removed [%d]",
+                        (int)OGS_POINTER_TO_UINT(e->h.sbi.data));
+                break;
+            }
             ogs_assert(OGS_FSM_STATE(&nf_instance->sm));
+            e->h.sbi.data = nf_instance;
 
             ogs_fsm_dispatch(&nf_instance->sm, e);
             if (OGS_FSM_CHECK(&nf_instance->sm, ogs_sbi_nf_state_exception))
@@ -421,8 +467,13 @@ void sepp_state_operational(ogs_fsm_t *s, sepp_event_t *e)
             break;
 
         case OGS_TIMER_SUBSCRIPTION_VALIDITY:
-            subscription_data = e->h.sbi.data;
-            ogs_assert(subscription_data);
+            subscription_data = ogs_sbi_subscription_data_find_by_pool_id(
+                    OGS_POINTER_TO_UINT(e->h.sbi.data));
+            if (!subscription_data) {
+                ogs_error("Subscription has already been removed [%d]",
+                        (int)OGS_POINTER_TO_UINT(e->h.sbi.data));
+                break;
+            }
 
             ogs_error("[%s] Subscription validity expired",
                     subscription_data->id ?
@@ -437,8 +488,13 @@ void sepp_state_operational(ogs_fsm_t *s, sepp_event_t *e)
             break;
 
         case OGS_TIMER_SUBSCRIPTION_PATCH:
-            subscription_data = e->h.sbi.data;
-            ogs_assert(subscription_data);
+            subscription_data = ogs_sbi_subscription_data_find_by_pool_id(
+                    OGS_POINTER_TO_UINT(e->h.sbi.data));
+            if (!subscription_data) {
+                ogs_error("Subscription has already been removed [%d]",
+                        (int)OGS_POINTER_TO_UINT(e->h.sbi.data));
+                break;
+            }
 
             if (ogs_nnrf_nfm_send_nf_status_update(subscription_data) != true)
                 ogs_error("[%s] NF status subscription update failed",

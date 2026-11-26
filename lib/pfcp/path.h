@@ -65,6 +65,8 @@ ogs_pkbuf_t *ogs_pfcp_handle_echo_req(ogs_pkbuf_t *pkt);
 int ogs_pfcp_send_heartbeat_request(ogs_pfcp_node_t *node,
         void (*cb)(ogs_pfcp_xact_t *xact, void *data));
 int ogs_pfcp_send_heartbeat_response(ogs_pfcp_xact_t *xact);
+void ogs_pfcp_send_heartbeat_response_to(
+        ogs_socket_t fd, ogs_sockaddr_t *to, uint32_t sqn);
 
 int ogs_pfcp_cp_send_association_setup_request(ogs_pfcp_node_t *node,
         void (*cb)(ogs_pfcp_xact_t *xact, void *data));
@@ -84,6 +86,10 @@ int ogs_pfcp_send_end_marker(ogs_pfcp_pdr_t *pdr);
 void ogs_pfcp_send_error_message(
     ogs_pfcp_xact_t *xact, uint64_t seid, uint8_t type,
     uint8_t cause_value, uint16_t offending_ie_value);
+
+void ogs_pfcp_send_session_modification_rule_error(
+        ogs_pfcp_xact_t *xact, uint64_t seid,
+        uint8_t rule_type, uint32_t rule_id);
 
 #ifdef __cplusplus
 }

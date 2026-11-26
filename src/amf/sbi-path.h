@@ -40,6 +40,15 @@ typedef struct amf_sbi_xact_ctx_s {
      * may change before the asynchronous response arrives.
      */
     ogs_pool_id_t ran_ue_id;
+
+    /*
+     * Snapshot of the target RAN-UE identifier for handover cancel.
+     *
+     * The source RAN-UE context can be removed before the asynchronous
+     * Update SM Context response arrives. Keep the target identifier in
+     * the SBI transaction so the target context can still be released.
+     */
+    ogs_pool_id_t target_ue_id;
 } amf_sbi_xact_ctx_t;
 
 int amf_sbi_open(void);
@@ -53,6 +62,19 @@ bool amf_sbi_send_request(
 #define AMF_UE_INITIATED_DE_REGISTERED                  1
 #define AMF_NETWORK_INITIATED_IMPLICIT_DE_REGISTERED    2
 #define AMF_NETWORK_INITIATED_EXPLICIT_DE_REGISTERED    3
+
+/* Nausf authentication procedures (deregistration DELETE is separate). */
+#define AMF_AUTH_VECTOR                                 61
+#define AMF_AUTH_CONFIRM                                62
+#define AMF_AUTH_FAILURE_REJECT                         63
+#define AMF_AUTH_FAILURE_RETRY                          64
+#define AMF_AUTH_FAILURE_RESYNC                         65
+/* Other SBI services may carry the same state value through an FSM transition. */
+#define AMF_AUTH_XACT_STATE(service, s) \
+    ((service) == OpenAPI_service_name_nausf_auth && \
+     (s) >= AMF_AUTH_VECTOR && (s) <= AMF_AUTH_FAILURE_RESYNC)
+#define AMF_AUTH_FAILURE_REPORT(s) \
+    ((s) >= AMF_AUTH_FAILURE_REJECT && (s) <= AMF_AUTH_FAILURE_RESYNC)
 
 #define AMF_UPDATE_SM_CONTEXT_ACTIVATED                 11
 #define AMF_UPDATE_SM_CONTEXT_SETUP_FAIL                12
@@ -68,9 +90,11 @@ bool amf_sbi_send_request(
 #define AMF_UPDATE_SM_CONTEXT_HANDOVER_REQ_ACK          22
 #define AMF_UPDATE_SM_CONTEXT_HANDOVER_NOTIFY           23
 #define AMF_UPDATE_SM_CONTEXT_HANDOVER_CANCEL           24
+#define AMF_UPDATE_SM_CONTEXT_STALE_USER_PLANE          25
 #define AMF_RELEASE_SM_CONTEXT_NO_STATE                 31
 #define AMF_RELEASE_SM_CONTEXT_REGISTRATION_ACCEPT      33
 #define AMF_RELEASE_SM_CONTEXT_SERVICE_ACCEPT           34
+#define AMF_RELEASE_SM_CONTEXT_AUTHENTICATED_REGISTRATION 35
 #define AMF_REMOVE_S1_CONTEXT_BY_LO_CONNREFUSED         51
 #define AMF_REMOVE_S1_CONTEXT_BY_RESET_ALL              52
 #define AMF_REMOVE_S1_CONTEXT_BY_RESET_PARTIAL          53
@@ -84,11 +108,13 @@ bool amf_sbi_send_request(
 #define AMF_SMF_SELECTION_IN_VPLMN_IN_HOME_ROUTED           2
 #define AMF_SMF_SELECTION_IN_HPLMN_IN_HOME_ROUTED           3
 
+void amf_ue_cancel_auth_xact(amf_ue_t *amf_ue);
 int amf_ue_sbi_discover_and_send(
         OpenAPI_service_name_e service_name,
         ogs_sbi_discovery_option_t *discovery_option,
         ogs_sbi_request_t *(*build)(amf_ue_t *amf_ue, void *data),
         amf_ue_t *amf_ue, int state, void *data);
+int amf_ue_sbi_discover_and_send_eir(amf_ue_t *amf_ue);
 int amf_sess_sbi_discover_and_send(
         OpenAPI_service_name_e service_name,
         ogs_sbi_discovery_option_t *discovery_option,
@@ -109,8 +135,14 @@ void amf_sbi_send_deactivate_all_sessions(
         ran_ue_t *ran_ue, amf_ue_t *amf_ue, int state, int group, int cause);
 void amf_sbi_send_deactivate_all_ue_in_gnb(amf_gnb_t *gnb, int state);
 
+/* Clean up after an NG context that was removed while held */
+void amf_sbi_send_deactivate_stale_user_plane(ran_ue_t *ran_ue);
+
 void amf_sbi_send_release_session(
         ran_ue_t *ran_ue, amf_sess_t *sess, int state, void *data);
+void amf_sbi_cancel_registration_session_release(amf_ue_t *amf_ue);
+void amf_sbi_fail_registration_session_release(
+        amf_ue_t *amf_ue, ran_ue_t *ran_ue, int status);
 void amf_sbi_send_release_all_sessions(
         ran_ue_t *ran_ue, amf_ue_t *amf_ue, int state, void *data);
 

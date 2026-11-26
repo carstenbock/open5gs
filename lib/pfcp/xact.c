@@ -88,6 +88,10 @@ ogs_pfcp_xact_t *ogs_pfcp_xact_local_create(ogs_pfcp_node_t *node,
     xact->cb = cb;
     xact->data = data;
 
+    /* Link before allocating timers so failure cleanup can unlink safely. */
+    ogs_list_add(xact->org == OGS_PFCP_LOCAL_ORIGINATOR ?
+            &xact->node->local_list : &xact->node->remote_list, xact);
+
     xact->tm_response = ogs_timer_add(
             ogs_app()->timer_mgr, response_timeout,
             OGS_UINT_TO_POINTER(xact->id));
@@ -121,9 +125,6 @@ ogs_pfcp_xact_t *ogs_pfcp_xact_local_create(ogs_pfcp_node_t *node,
         ogs_pfcp_xact_delete(xact);
         return NULL;
     }
-
-    ogs_list_add(xact->org == OGS_PFCP_LOCAL_ORIGINATOR ?
-            &xact->node->local_list : &xact->node->remote_list, xact);
 
     ogs_list_init(&xact->pdr_to_create_list);
 
@@ -154,6 +155,10 @@ static ogs_pfcp_xact_t *ogs_pfcp_xact_remote_create(
     xact->xid = OGS_PFCP_SQN_TO_XID(sqn);
     xact->node = node;
 
+    /* Link before allocating timers so failure cleanup can unlink safely. */
+    ogs_list_add(xact->org == OGS_PFCP_LOCAL_ORIGINATOR ?
+            &xact->node->local_list : &xact->node->remote_list, xact);
+
     xact->tm_response = ogs_timer_add(
             ogs_app()->timer_mgr, response_timeout,
             OGS_UINT_TO_POINTER(xact->id));
@@ -187,9 +192,6 @@ static ogs_pfcp_xact_t *ogs_pfcp_xact_remote_create(
         ogs_pfcp_xact_delete(xact);
         return NULL;
     }
-
-    ogs_list_add(xact->org == OGS_PFCP_LOCAL_ORIGINATOR ?
-            &xact->node->local_list : &xact->node->remote_list, xact);
 
     ogs_debug("[%d] %s Create  peer %s",
             xact->xid,
@@ -761,12 +763,35 @@ int ogs_pfcp_xact_receive(
         }
     }
 
+    /*
+     * 3GPP TS 29.244 7.6.5: an unexpected response shall be discarded.
+     * A response of another message type, or with the SEID of another
+     * session, does not answer the outstanding request.
+     */
+    if (new && stage == PFCP_XACT_FINAL_STAGE &&
+        ((type != new->seq[0].type + 1 &&
+          type != OGS_PFCP_VERSION_NOT_SUPPORTED_RESPONSE_TYPE) ||
+         (new->local_seid && h->seid_presence && h->seid &&
+          h->seid != new->local_seid))) {
+        ogs_error("[%d] Discard type %u SEID 0x%lx for Request type %u "
+                "SEID 0x%lx from PFCP peer %s", xid, type,
+                h->seid_presence ? (long)h->seid : 0,
+                new->seq[0].type, (long)new->local_seid,
+                ogs_sockaddr_to_string_static(node->addr_list));
+        return OGS_RETRY;
+    }
+
     if (!new) {
         ogs_debug("[%d] Cannot find new type %u from PFCP peer %s",
                 xid, type, ogs_sockaddr_to_string_static(node->addr_list));
         new = ogs_pfcp_xact_remote_create(node, sqn);
+        if (!new) {
+            ogs_error("[%d] No PFCP transaction resource for type %u "
+                    "from peer %s", xid, type,
+                    ogs_sockaddr_to_string_static(node->addr_list));
+            return OGS_ERROR;
+        }
     }
-    ogs_assert(new);
 
     ogs_debug("[%d] %s Receive peer %s",
             new->xid,

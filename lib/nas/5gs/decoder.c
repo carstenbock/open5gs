@@ -28,7 +28,7 @@
 /*******************************************************************************
  * This file had been created by nas-message.py script v0.2.0
  * Please do not modify this file but regenerate it via script.
- * Created on: 2026-06-15 16:17:36.453801 by acetcom
+ * Created on: 2026-11-03 17:52:26.739768 by pespin
  * from r19.6.2/24501-j62-ch8-ch9.docx
  ******************************************************************************/
 
@@ -552,7 +552,15 @@ int ogs_nas_5gs_decode_registration_request(ogs_nas_5gs_message_t *message, ogs_
             decoded += size;
             break;
         default:
-            ogs_error("Unknown type(0x%x) or not implemented\n", type);
+            ogs_warn("Unknown type(0x%x) or not implemented\n", type);
+            size = ogs_nas_skip_unknown_ie(type, pkbuf,
+                    OGS_NAS_5GS_TLV_E_IEI_MIN);
+            if (size < 0) {
+               ogs_error("ogs_nas_skip_unknown_ie() failed");
+               return size;
+            }
+
+            decoded += size;
             break;
         }
     }
@@ -1231,7 +1239,15 @@ int ogs_nas_5gs_decode_registration_accept(ogs_nas_5gs_message_t *message, ogs_p
             decoded += size;
             break;
         default:
-            ogs_error("Unknown type(0x%x) or not implemented\n", type);
+            ogs_warn("Unknown type(0x%x) or not implemented\n", type);
+            size = ogs_nas_skip_unknown_ie(type, pkbuf,
+                    OGS_NAS_5GS_TLV_E_IEI_MIN);
+            if (size < 0) {
+               ogs_error("ogs_nas_skip_unknown_ie() failed");
+               return size;
+            }
+
+            decoded += size;
             break;
         }
     }
@@ -1270,7 +1286,15 @@ int ogs_nas_5gs_decode_registration_complete(ogs_nas_5gs_message_t *message, ogs
             decoded += size;
             break;
         default:
-            ogs_error("Unknown type(0x%x) or not implemented\n", type);
+            ogs_warn("Unknown type(0x%x) or not implemented\n", type);
+            size = ogs_nas_skip_unknown_ie(type, pkbuf,
+                    OGS_NAS_5GS_TLV_E_IEI_MIN);
+            if (size < 0) {
+               ogs_error("ogs_nas_skip_unknown_ie() failed");
+               return size;
+            }
+
+            decoded += size;
             break;
         }
     }
@@ -1457,7 +1481,15 @@ int ogs_nas_5gs_decode_registration_reject(ogs_nas_5gs_message_t *message, ogs_p
             decoded += size;
             break;
         default:
-            ogs_error("Unknown type(0x%x) or not implemented\n", type);
+            ogs_warn("Unknown type(0x%x) or not implemented\n", type);
+            size = ogs_nas_skip_unknown_ie(type, pkbuf,
+                    OGS_NAS_5GS_TLV_E_IEI_MIN);
+            if (size < 0) {
+               ogs_error("ogs_nas_skip_unknown_ie() failed");
+               return size;
+            }
+
+            decoded += size;
             break;
         }
     }
@@ -1522,7 +1554,15 @@ int ogs_nas_5gs_decode_deregistration_request_from_ue(ogs_nas_5gs_message_t *mes
             decoded += size;
             break;
         default:
-            ogs_error("Unknown type(0x%x) or not implemented\n", type);
+            ogs_warn("Unknown type(0x%x) or not implemented\n", type);
+            size = ogs_nas_skip_unknown_ie(type, pkbuf,
+                    OGS_NAS_5GS_TLV_E_IEI_MIN);
+            if (size < 0) {
+               ogs_error("ogs_nas_skip_unknown_ie() failed");
+               return size;
+            }
+
+            decoded += size;
             break;
         }
     }
@@ -1669,7 +1709,15 @@ int ogs_nas_5gs_decode_deregistration_request_to_ue(ogs_nas_5gs_message_t *messa
             decoded += size;
             break;
         default:
-            ogs_error("Unknown type(0x%x) or not implemented\n", type);
+            ogs_warn("Unknown type(0x%x) or not implemented\n", type);
+            size = ogs_nas_skip_unknown_ie(type, pkbuf,
+                    OGS_NAS_5GS_TLV_E_IEI_MIN);
+            if (size < 0) {
+               ogs_error("ogs_nas_skip_unknown_ie() failed");
+               return size;
+            }
+
+            decoded += size;
             break;
         }
     }
@@ -1774,7 +1822,15 @@ int ogs_nas_5gs_decode_service_request(ogs_nas_5gs_message_t *message, ogs_pkbuf
             decoded += size;
             break;
         default:
-            ogs_error("Unknown type(0x%x) or not implemented\n", type);
+            ogs_warn("Unknown type(0x%x) or not implemented\n", type);
+            size = ogs_nas_skip_unknown_ie(type, pkbuf,
+                    OGS_NAS_5GS_TLV_E_IEI_MIN);
+            if (size < 0) {
+               ogs_error("ogs_nas_skip_unknown_ie() failed");
+               return size;
+            }
+
+            decoded += size;
             break;
         }
     }
@@ -1921,7 +1977,15 @@ int ogs_nas_5gs_decode_service_reject(ogs_nas_5gs_message_t *message, ogs_pkbuf_
             decoded += size;
             break;
         default:
-            ogs_error("Unknown type(0x%x) or not implemented\n", type);
+            ogs_warn("Unknown type(0x%x) or not implemented\n", type);
+            size = ogs_nas_skip_unknown_ie(type, pkbuf,
+                    OGS_NAS_5GS_TLV_E_IEI_MIN);
+            if (size < 0) {
+               ogs_error("ogs_nas_skip_unknown_ie() failed");
+               return size;
+            }
+
+            decoded += size;
             break;
         }
     }
@@ -2030,7 +2094,15 @@ int ogs_nas_5gs_decode_service_accept(ogs_nas_5gs_message_t *message, ogs_pkbuf_
             decoded += size;
             break;
         default:
-            ogs_error("Unknown type(0x%x) or not implemented\n", type);
+            ogs_warn("Unknown type(0x%x) or not implemented\n", type);
+            size = ogs_nas_skip_unknown_ie(type, pkbuf,
+                    OGS_NAS_5GS_TLV_E_IEI_MIN);
+            if (size < 0) {
+               ogs_error("ogs_nas_skip_unknown_ie() failed");
+               return size;
+            }
+
+            decoded += size;
             break;
         }
     }
@@ -2545,7 +2617,15 @@ int ogs_nas_5gs_decode_configuration_update_command(ogs_nas_5gs_message_t *messa
             decoded += size;
             break;
         default:
-            ogs_error("Unknown type(0x%x) or not implemented\n", type);
+            ogs_warn("Unknown type(0x%x) or not implemented\n", type);
+            size = ogs_nas_skip_unknown_ie(type, pkbuf,
+                    OGS_NAS_5GS_TLV_E_IEI_MIN);
+            if (size < 0) {
+               ogs_error("ogs_nas_skip_unknown_ie() failed");
+               return size;
+            }
+
+            decoded += size;
             break;
         }
     }
@@ -2620,7 +2700,15 @@ int ogs_nas_5gs_decode_authentication_request(ogs_nas_5gs_message_t *message, og
             decoded += size;
             break;
         default:
-            ogs_error("Unknown type(0x%x) or not implemented\n", type);
+            ogs_warn("Unknown type(0x%x) or not implemented\n", type);
+            size = ogs_nas_skip_unknown_ie(type, pkbuf,
+                    OGS_NAS_5GS_TLV_E_IEI_MIN);
+            if (size < 0) {
+               ogs_error("ogs_nas_skip_unknown_ie() failed");
+               return size;
+            }
+
+            decoded += size;
             break;
         }
     }
@@ -2669,7 +2757,15 @@ int ogs_nas_5gs_decode_authentication_response(ogs_nas_5gs_message_t *message, o
             decoded += size;
             break;
         default:
-            ogs_error("Unknown type(0x%x) or not implemented\n", type);
+            ogs_warn("Unknown type(0x%x) or not implemented\n", type);
+            size = ogs_nas_skip_unknown_ie(type, pkbuf,
+                    OGS_NAS_5GS_TLV_E_IEI_MIN);
+            if (size < 0) {
+               ogs_error("ogs_nas_skip_unknown_ie() failed");
+               return size;
+            }
+
+            decoded += size;
             break;
         }
     }
@@ -2708,7 +2804,15 @@ int ogs_nas_5gs_decode_authentication_reject(ogs_nas_5gs_message_t *message, ogs
             decoded += size;
             break;
         default:
-            ogs_error("Unknown type(0x%x) or not implemented\n", type);
+            ogs_warn("Unknown type(0x%x) or not implemented\n", type);
+            size = ogs_nas_skip_unknown_ie(type, pkbuf,
+                    OGS_NAS_5GS_TLV_E_IEI_MIN);
+            if (size < 0) {
+               ogs_error("ogs_nas_skip_unknown_ie() failed");
+               return size;
+            }
+
+            decoded += size;
             break;
         }
     }
@@ -2755,7 +2859,15 @@ int ogs_nas_5gs_decode_authentication_failure(ogs_nas_5gs_message_t *message, og
             decoded += size;
             break;
         default:
-            ogs_error("Unknown type(0x%x) or not implemented\n", type);
+            ogs_warn("Unknown type(0x%x) or not implemented\n", type);
+            size = ogs_nas_skip_unknown_ie(type, pkbuf,
+                    OGS_NAS_5GS_TLV_E_IEI_MIN);
+            if (size < 0) {
+               ogs_error("ogs_nas_skip_unknown_ie() failed");
+               return size;
+            }
+
+            decoded += size;
             break;
         }
     }
@@ -2820,7 +2932,15 @@ int ogs_nas_5gs_decode_authentication_result(ogs_nas_5gs_message_t *message, ogs
             decoded += size;
             break;
         default:
-            ogs_error("Unknown type(0x%x) or not implemented\n", type);
+            ogs_warn("Unknown type(0x%x) or not implemented\n", type);
+            size = ogs_nas_skip_unknown_ie(type, pkbuf,
+                    OGS_NAS_5GS_TLV_E_IEI_MIN);
+            if (size < 0) {
+               ogs_error("ogs_nas_skip_unknown_ie() failed");
+               return size;
+            }
+
+            decoded += size;
             break;
         }
     }
@@ -2983,7 +3103,15 @@ int ogs_nas_5gs_decode_security_mode_command(ogs_nas_5gs_message_t *message, ogs
             decoded += size;
             break;
         default:
-            ogs_error("Unknown type(0x%x) or not implemented\n", type);
+            ogs_warn("Unknown type(0x%x) or not implemented\n", type);
+            size = ogs_nas_skip_unknown_ie(type, pkbuf,
+                    OGS_NAS_5GS_TLV_E_IEI_MIN);
+            if (size < 0) {
+               ogs_error("ogs_nas_skip_unknown_ie() failed");
+               return size;
+            }
+
+            decoded += size;
             break;
         }
     }
@@ -3042,7 +3170,15 @@ int ogs_nas_5gs_decode_security_mode_complete(ogs_nas_5gs_message_t *message, og
             decoded += size;
             break;
         default:
-            ogs_error("Unknown type(0x%x) or not implemented\n", type);
+            ogs_warn("Unknown type(0x%x) or not implemented\n", type);
+            size = ogs_nas_skip_unknown_ie(type, pkbuf,
+                    OGS_NAS_5GS_TLV_E_IEI_MIN);
+            if (size < 0) {
+               ogs_error("ogs_nas_skip_unknown_ie() failed");
+               return size;
+            }
+
+            decoded += size;
             break;
         }
     }
@@ -3138,7 +3274,15 @@ int ogs_nas_5gs_decode_notification_response(ogs_nas_5gs_message_t *message, ogs
             decoded += size;
             break;
         default:
-            ogs_error("Unknown type(0x%x) or not implemented\n", type);
+            ogs_warn("Unknown type(0x%x) or not implemented\n", type);
+            size = ogs_nas_skip_unknown_ie(type, pkbuf,
+                    OGS_NAS_5GS_TLV_E_IEI_MIN);
+            if (size < 0) {
+               ogs_error("ogs_nas_skip_unknown_ie() failed");
+               return size;
+            }
+
+            decoded += size;
             break;
         }
     }
@@ -3301,7 +3445,15 @@ int ogs_nas_5gs_decode_ul_nas_transport(ogs_nas_5gs_message_t *message, ogs_pkbu
             decoded += size;
             break;
         default:
-            ogs_error("Unknown type(0x%x) or not implemented\n", type);
+            ogs_warn("Unknown type(0x%x) or not implemented\n", type);
+            size = ogs_nas_skip_unknown_ie(type, pkbuf,
+                    OGS_NAS_5GS_TLV_E_IEI_MIN);
+            if (size < 0) {
+               ogs_error("ogs_nas_skip_unknown_ie() failed");
+               return size;
+            }
+
+            decoded += size;
             break;
         }
     }
@@ -3396,7 +3548,15 @@ int ogs_nas_5gs_decode_dl_nas_transport(ogs_nas_5gs_message_t *message, ogs_pkbu
             decoded += size;
             break;
         default:
-            ogs_error("Unknown type(0x%x) or not implemented\n", type);
+            ogs_warn("Unknown type(0x%x) or not implemented\n", type);
+            size = ogs_nas_skip_unknown_ie(type, pkbuf,
+                    OGS_NAS_5GS_TLV_E_IEI_MIN);
+            if (size < 0) {
+               ogs_error("ogs_nas_skip_unknown_ie() failed");
+               return size;
+            }
+
+            decoded += size;
             break;
         }
     }
@@ -3619,7 +3779,15 @@ int ogs_nas_5gs_decode_pdu_session_establishment_request(ogs_nas_5gs_message_t *
             decoded += size;
             break;
         default:
-            ogs_error("Unknown type(0x%x) or not implemented\n", type);
+            ogs_warn("Unknown type(0x%x) or not implemented\n", type);
+            size = ogs_nas_skip_unknown_ie(type, pkbuf,
+                    OGS_NAS_5GS_TLV_E_IEI_MIN);
+            if (size < 0) {
+               ogs_error("ogs_nas_skip_unknown_ie() failed");
+               return size;
+            }
+
+            decoded += size;
             break;
         }
     }
@@ -3886,7 +4054,15 @@ int ogs_nas_5gs_decode_pdu_session_establishment_accept(ogs_nas_5gs_message_t *m
             decoded += size;
             break;
         default:
-            ogs_error("Unknown type(0x%x) or not implemented\n", type);
+            ogs_warn("Unknown type(0x%x) or not implemented\n", type);
+            size = ogs_nas_skip_unknown_ie(type, pkbuf,
+                    OGS_NAS_5GS_TLV_E_IEI_MIN);
+            if (size < 0) {
+               ogs_error("ogs_nas_skip_unknown_ie() failed");
+               return size;
+            }
+
+            decoded += size;
             break;
         }
     }
@@ -4005,7 +4181,15 @@ int ogs_nas_5gs_decode_pdu_session_establishment_reject(ogs_nas_5gs_message_t *m
             decoded += size;
             break;
         default:
-            ogs_error("Unknown type(0x%x) or not implemented\n", type);
+            ogs_warn("Unknown type(0x%x) or not implemented\n", type);
+            size = ogs_nas_skip_unknown_ie(type, pkbuf,
+                    OGS_NAS_5GS_TLV_E_IEI_MIN);
+            if (size < 0) {
+               ogs_error("ogs_nas_skip_unknown_ie() failed");
+               return size;
+            }
+
+            decoded += size;
             break;
         }
     }
@@ -4052,7 +4236,15 @@ int ogs_nas_5gs_decode_pdu_session_authentication_command(ogs_nas_5gs_message_t 
             decoded += size;
             break;
         default:
-            ogs_error("Unknown type(0x%x) or not implemented\n", type);
+            ogs_warn("Unknown type(0x%x) or not implemented\n", type);
+            size = ogs_nas_skip_unknown_ie(type, pkbuf,
+                    OGS_NAS_5GS_TLV_E_IEI_MIN);
+            if (size < 0) {
+               ogs_error("ogs_nas_skip_unknown_ie() failed");
+               return size;
+            }
+
+            decoded += size;
             break;
         }
     }
@@ -4099,7 +4291,15 @@ int ogs_nas_5gs_decode_pdu_session_authentication_complete(ogs_nas_5gs_message_t
             decoded += size;
             break;
         default:
-            ogs_error("Unknown type(0x%x) or not implemented\n", type);
+            ogs_warn("Unknown type(0x%x) or not implemented\n", type);
+            size = ogs_nas_skip_unknown_ie(type, pkbuf,
+                    OGS_NAS_5GS_TLV_E_IEI_MIN);
+            if (size < 0) {
+               ogs_error("ogs_nas_skip_unknown_ie() failed");
+               return size;
+            }
+
+            decoded += size;
             break;
         }
     }
@@ -4148,7 +4348,15 @@ int ogs_nas_5gs_decode_pdu_session_authentication_result(ogs_nas_5gs_message_t *
             decoded += size;
             break;
         default:
-            ogs_error("Unknown type(0x%x) or not implemented\n", type);
+            ogs_warn("Unknown type(0x%x) or not implemented\n", type);
+            size = ogs_nas_skip_unknown_ie(type, pkbuf,
+                    OGS_NAS_5GS_TLV_E_IEI_MIN);
+            if (size < 0) {
+               ogs_error("ogs_nas_skip_unknown_ie() failed");
+               return size;
+            }
+
+            decoded += size;
             break;
         }
     }
@@ -4349,7 +4557,15 @@ int ogs_nas_5gs_decode_pdu_session_modification_request(ogs_nas_5gs_message_t *m
             decoded += size;
             break;
         default:
-            ogs_error("Unknown type(0x%x) or not implemented\n", type);
+            ogs_warn("Unknown type(0x%x) or not implemented\n", type);
+            size = ogs_nas_skip_unknown_ie(type, pkbuf,
+                    OGS_NAS_5GS_TLV_E_IEI_MIN);
+            if (size < 0) {
+               ogs_error("ogs_nas_skip_unknown_ie() failed");
+               return size;
+            }
+
+            decoded += size;
             break;
         }
     }
@@ -4426,7 +4642,15 @@ int ogs_nas_5gs_decode_pdu_session_modification_reject(ogs_nas_5gs_message_t *me
             decoded += size;
             break;
         default:
-            ogs_error("Unknown type(0x%x) or not implemented\n", type);
+            ogs_warn("Unknown type(0x%x) or not implemented\n", type);
+            size = ogs_nas_skip_unknown_ie(type, pkbuf,
+                    OGS_NAS_5GS_TLV_E_IEI_MIN);
+            if (size < 0) {
+               ogs_error("ogs_nas_skip_unknown_ie() failed");
+               return size;
+            }
+
+            decoded += size;
             break;
         }
     }
@@ -4647,7 +4871,15 @@ int ogs_nas_5gs_decode_pdu_session_modification_command(ogs_nas_5gs_message_t *m
             decoded += size;
             break;
         default:
-            ogs_error("Unknown type(0x%x) or not implemented\n", type);
+            ogs_warn("Unknown type(0x%x) or not implemented\n", type);
+            size = ogs_nas_skip_unknown_ie(type, pkbuf,
+                    OGS_NAS_5GS_TLV_E_IEI_MIN);
+            if (size < 0) {
+               ogs_error("ogs_nas_skip_unknown_ie() failed");
+               return size;
+            }
+
+            decoded += size;
             break;
         }
     }
@@ -4696,7 +4928,15 @@ int ogs_nas_5gs_decode_pdu_session_modification_complete(ogs_nas_5gs_message_t *
             decoded += size;
             break;
         default:
-            ogs_error("Unknown type(0x%x) or not implemented\n", type);
+            ogs_warn("Unknown type(0x%x) or not implemented\n", type);
+            size = ogs_nas_skip_unknown_ie(type, pkbuf,
+                    OGS_NAS_5GS_TLV_E_IEI_MIN);
+            if (size < 0) {
+               ogs_error("ogs_nas_skip_unknown_ie() failed");
+               return size;
+            }
+
+            decoded += size;
             break;
         }
     }
@@ -4743,7 +4983,15 @@ int ogs_nas_5gs_decode_pdu_session_modification_command_reject(ogs_nas_5gs_messa
             decoded += size;
             break;
         default:
-            ogs_error("Unknown type(0x%x) or not implemented\n", type);
+            ogs_warn("Unknown type(0x%x) or not implemented\n", type);
+            size = ogs_nas_skip_unknown_ie(type, pkbuf,
+                    OGS_NAS_5GS_TLV_E_IEI_MIN);
+            if (size < 0) {
+               ogs_error("ogs_nas_skip_unknown_ie() failed");
+               return size;
+            }
+
+            decoded += size;
             break;
         }
     }
@@ -4792,7 +5040,15 @@ int ogs_nas_5gs_decode_pdu_session_release_request(ogs_nas_5gs_message_t *messag
             decoded += size;
             break;
         default:
-            ogs_error("Unknown type(0x%x) or not implemented\n", type);
+            ogs_warn("Unknown type(0x%x) or not implemented\n", type);
+            size = ogs_nas_skip_unknown_ie(type, pkbuf,
+                    OGS_NAS_5GS_TLV_E_IEI_MIN);
+            if (size < 0) {
+               ogs_error("ogs_nas_skip_unknown_ie() failed");
+               return size;
+            }
+
+            decoded += size;
             break;
         }
     }
@@ -4839,7 +5095,15 @@ int ogs_nas_5gs_decode_pdu_session_release_reject(ogs_nas_5gs_message_t *message
             decoded += size;
             break;
         default:
-            ogs_error("Unknown type(0x%x) or not implemented\n", type);
+            ogs_warn("Unknown type(0x%x) or not implemented\n", type);
+            size = ogs_nas_skip_unknown_ie(type, pkbuf,
+                    OGS_NAS_5GS_TLV_E_IEI_MIN);
+            if (size < 0) {
+               ogs_error("ogs_nas_skip_unknown_ie() failed");
+               return size;
+            }
+
+            decoded += size;
             break;
         }
     }
@@ -4948,7 +5212,15 @@ int ogs_nas_5gs_decode_pdu_session_release_command(ogs_nas_5gs_message_t *messag
             decoded += size;
             break;
         default:
-            ogs_error("Unknown type(0x%x) or not implemented\n", type);
+            ogs_warn("Unknown type(0x%x) or not implemented\n", type);
+            size = ogs_nas_skip_unknown_ie(type, pkbuf,
+                    OGS_NAS_5GS_TLV_E_IEI_MIN);
+            if (size < 0) {
+               ogs_error("ogs_nas_skip_unknown_ie() failed");
+               return size;
+            }
+
+            decoded += size;
             break;
         }
     }
@@ -4997,7 +5269,15 @@ int ogs_nas_5gs_decode_pdu_session_release_complete(ogs_nas_5gs_message_t *messa
             decoded += size;
             break;
         default:
-            ogs_error("Unknown type(0x%x) or not implemented\n", type);
+            ogs_warn("Unknown type(0x%x) or not implemented\n", type);
+            size = ogs_nas_skip_unknown_ie(type, pkbuf,
+                    OGS_NAS_5GS_TLV_E_IEI_MIN);
+            if (size < 0) {
+               ogs_error("ogs_nas_skip_unknown_ie() failed");
+               return size;
+            }
+
+            decoded += size;
             break;
         }
     }
@@ -5047,7 +5327,7 @@ int ogs_nas_5gmm_decode(ogs_nas_5gs_message_t *message, ogs_pkbuf_t *pkbuf)
         size = ogs_nas_5gs_decode_registration_request(message, pkbuf);
         if (size < 0) {
            ogs_error("ogs_nas_5gs_decode_registration_request() failed");
-           return size;
+           return OGS_ERROR;
         }
 
         decoded += size;
@@ -5056,7 +5336,7 @@ int ogs_nas_5gmm_decode(ogs_nas_5gs_message_t *message, ogs_pkbuf_t *pkbuf)
         size = ogs_nas_5gs_decode_registration_accept(message, pkbuf);
         if (size < 0) {
            ogs_error("ogs_nas_5gs_decode_registration_accept() failed");
-           return size;
+           return OGS_ERROR;
         }
 
         decoded += size;
@@ -5065,7 +5345,7 @@ int ogs_nas_5gmm_decode(ogs_nas_5gs_message_t *message, ogs_pkbuf_t *pkbuf)
         size = ogs_nas_5gs_decode_registration_complete(message, pkbuf);
         if (size < 0) {
            ogs_error("ogs_nas_5gs_decode_registration_complete() failed");
-           return size;
+           return OGS_ERROR;
         }
 
         decoded += size;
@@ -5074,7 +5354,7 @@ int ogs_nas_5gmm_decode(ogs_nas_5gs_message_t *message, ogs_pkbuf_t *pkbuf)
         size = ogs_nas_5gs_decode_registration_reject(message, pkbuf);
         if (size < 0) {
            ogs_error("ogs_nas_5gs_decode_registration_reject() failed");
-           return size;
+           return OGS_ERROR;
         }
 
         decoded += size;
@@ -5083,7 +5363,7 @@ int ogs_nas_5gmm_decode(ogs_nas_5gs_message_t *message, ogs_pkbuf_t *pkbuf)
         size = ogs_nas_5gs_decode_deregistration_request_from_ue(message, pkbuf);
         if (size < 0) {
            ogs_error("ogs_nas_5gs_decode_deregistration_request_from_ue() failed");
-           return size;
+           return OGS_ERROR;
         }
 
         decoded += size;
@@ -5094,7 +5374,7 @@ int ogs_nas_5gmm_decode(ogs_nas_5gs_message_t *message, ogs_pkbuf_t *pkbuf)
         size = ogs_nas_5gs_decode_deregistration_request_to_ue(message, pkbuf);
         if (size < 0) {
            ogs_error("ogs_nas_5gs_decode_deregistration_request_to_ue() failed");
-           return size;
+           return OGS_ERROR;
         }
 
         decoded += size;
@@ -5105,7 +5385,7 @@ int ogs_nas_5gmm_decode(ogs_nas_5gs_message_t *message, ogs_pkbuf_t *pkbuf)
         size = ogs_nas_5gs_decode_service_request(message, pkbuf);
         if (size < 0) {
            ogs_error("ogs_nas_5gs_decode_service_request() failed");
-           return size;
+           return OGS_ERROR;
         }
 
         decoded += size;
@@ -5114,7 +5394,7 @@ int ogs_nas_5gmm_decode(ogs_nas_5gs_message_t *message, ogs_pkbuf_t *pkbuf)
         size = ogs_nas_5gs_decode_service_reject(message, pkbuf);
         if (size < 0) {
            ogs_error("ogs_nas_5gs_decode_service_reject() failed");
-           return size;
+           return OGS_ERROR;
         }
 
         decoded += size;
@@ -5123,7 +5403,7 @@ int ogs_nas_5gmm_decode(ogs_nas_5gs_message_t *message, ogs_pkbuf_t *pkbuf)
         size = ogs_nas_5gs_decode_service_accept(message, pkbuf);
         if (size < 0) {
            ogs_error("ogs_nas_5gs_decode_service_accept() failed");
-           return size;
+           return OGS_ERROR;
         }
 
         decoded += size;
@@ -5132,7 +5412,7 @@ int ogs_nas_5gmm_decode(ogs_nas_5gs_message_t *message, ogs_pkbuf_t *pkbuf)
         size = ogs_nas_5gs_decode_configuration_update_command(message, pkbuf);
         if (size < 0) {
            ogs_error("ogs_nas_5gs_decode_configuration_update_command() failed");
-           return size;
+           return OGS_ERROR;
         }
 
         decoded += size;
@@ -5143,7 +5423,7 @@ int ogs_nas_5gmm_decode(ogs_nas_5gs_message_t *message, ogs_pkbuf_t *pkbuf)
         size = ogs_nas_5gs_decode_authentication_request(message, pkbuf);
         if (size < 0) {
            ogs_error("ogs_nas_5gs_decode_authentication_request() failed");
-           return size;
+           return OGS_ERROR;
         }
 
         decoded += size;
@@ -5152,7 +5432,7 @@ int ogs_nas_5gmm_decode(ogs_nas_5gs_message_t *message, ogs_pkbuf_t *pkbuf)
         size = ogs_nas_5gs_decode_authentication_response(message, pkbuf);
         if (size < 0) {
            ogs_error("ogs_nas_5gs_decode_authentication_response() failed");
-           return size;
+           return OGS_ERROR;
         }
 
         decoded += size;
@@ -5161,7 +5441,7 @@ int ogs_nas_5gmm_decode(ogs_nas_5gs_message_t *message, ogs_pkbuf_t *pkbuf)
         size = ogs_nas_5gs_decode_authentication_reject(message, pkbuf);
         if (size < 0) {
            ogs_error("ogs_nas_5gs_decode_authentication_reject() failed");
-           return size;
+           return OGS_ERROR;
         }
 
         decoded += size;
@@ -5170,7 +5450,7 @@ int ogs_nas_5gmm_decode(ogs_nas_5gs_message_t *message, ogs_pkbuf_t *pkbuf)
         size = ogs_nas_5gs_decode_authentication_failure(message, pkbuf);
         if (size < 0) {
            ogs_error("ogs_nas_5gs_decode_authentication_failure() failed");
-           return size;
+           return OGS_ERROR;
         }
 
         decoded += size;
@@ -5179,7 +5459,7 @@ int ogs_nas_5gmm_decode(ogs_nas_5gs_message_t *message, ogs_pkbuf_t *pkbuf)
         size = ogs_nas_5gs_decode_authentication_result(message, pkbuf);
         if (size < 0) {
            ogs_error("ogs_nas_5gs_decode_authentication_result() failed");
-           return size;
+           return OGS_ERROR;
         }
 
         decoded += size;
@@ -5188,7 +5468,7 @@ int ogs_nas_5gmm_decode(ogs_nas_5gs_message_t *message, ogs_pkbuf_t *pkbuf)
         size = ogs_nas_5gs_decode_identity_request(message, pkbuf);
         if (size < 0) {
            ogs_error("ogs_nas_5gs_decode_identity_request() failed");
-           return size;
+           return OGS_ERROR;
         }
 
         decoded += size;
@@ -5197,7 +5477,7 @@ int ogs_nas_5gmm_decode(ogs_nas_5gs_message_t *message, ogs_pkbuf_t *pkbuf)
         size = ogs_nas_5gs_decode_identity_response(message, pkbuf);
         if (size < 0) {
            ogs_error("ogs_nas_5gs_decode_identity_response() failed");
-           return size;
+           return OGS_ERROR;
         }
 
         decoded += size;
@@ -5206,7 +5486,7 @@ int ogs_nas_5gmm_decode(ogs_nas_5gs_message_t *message, ogs_pkbuf_t *pkbuf)
         size = ogs_nas_5gs_decode_security_mode_command(message, pkbuf);
         if (size < 0) {
            ogs_error("ogs_nas_5gs_decode_security_mode_command() failed");
-           return size;
+           return OGS_ERROR;
         }
 
         decoded += size;
@@ -5215,7 +5495,7 @@ int ogs_nas_5gmm_decode(ogs_nas_5gs_message_t *message, ogs_pkbuf_t *pkbuf)
         size = ogs_nas_5gs_decode_security_mode_complete(message, pkbuf);
         if (size < 0) {
            ogs_error("ogs_nas_5gs_decode_security_mode_complete() failed");
-           return size;
+           return OGS_ERROR;
         }
 
         decoded += size;
@@ -5224,7 +5504,7 @@ int ogs_nas_5gmm_decode(ogs_nas_5gs_message_t *message, ogs_pkbuf_t *pkbuf)
         size = ogs_nas_5gs_decode_security_mode_reject(message, pkbuf);
         if (size < 0) {
            ogs_error("ogs_nas_5gs_decode_security_mode_reject() failed");
-           return size;
+           return OGS_ERROR;
         }
 
         decoded += size;
@@ -5233,7 +5513,7 @@ int ogs_nas_5gmm_decode(ogs_nas_5gs_message_t *message, ogs_pkbuf_t *pkbuf)
         size = ogs_nas_5gs_decode_5gmm_status(message, pkbuf);
         if (size < 0) {
            ogs_error("ogs_nas_5gs_decode_5gmm_status() failed");
-           return size;
+           return OGS_ERROR;
         }
 
         decoded += size;
@@ -5242,7 +5522,7 @@ int ogs_nas_5gmm_decode(ogs_nas_5gs_message_t *message, ogs_pkbuf_t *pkbuf)
         size = ogs_nas_5gs_decode_notification(message, pkbuf);
         if (size < 0) {
            ogs_error("ogs_nas_5gs_decode_notification() failed");
-           return size;
+           return OGS_ERROR;
         }
 
         decoded += size;
@@ -5251,7 +5531,7 @@ int ogs_nas_5gmm_decode(ogs_nas_5gs_message_t *message, ogs_pkbuf_t *pkbuf)
         size = ogs_nas_5gs_decode_notification_response(message, pkbuf);
         if (size < 0) {
            ogs_error("ogs_nas_5gs_decode_notification_response() failed");
-           return size;
+           return OGS_ERROR;
         }
 
         decoded += size;
@@ -5260,7 +5540,7 @@ int ogs_nas_5gmm_decode(ogs_nas_5gs_message_t *message, ogs_pkbuf_t *pkbuf)
         size = ogs_nas_5gs_decode_ul_nas_transport(message, pkbuf);
         if (size < 0) {
            ogs_error("ogs_nas_5gs_decode_ul_nas_transport() failed");
-           return size;
+           return OGS_ERROR;
         }
 
         decoded += size;
@@ -5269,13 +5549,13 @@ int ogs_nas_5gmm_decode(ogs_nas_5gs_message_t *message, ogs_pkbuf_t *pkbuf)
         size = ogs_nas_5gs_decode_dl_nas_transport(message, pkbuf);
         if (size < 0) {
            ogs_error("ogs_nas_5gs_decode_dl_nas_transport() failed");
-           return size;
+           return OGS_ERROR;
         }
 
         decoded += size;
         break;
     default:
-        ogs_error("Unknown message type (0x%x) or not implemented", 
+        ogs_error("Unknown message type (0x%x) or not implemented",
                 message->gmm.h.message_type);
         break;
     }
@@ -5307,7 +5587,7 @@ int ogs_nas_5gsm_decode(ogs_nas_5gs_message_t *message, ogs_pkbuf_t *pkbuf)
         size = ogs_nas_5gs_decode_pdu_session_establishment_request(message, pkbuf);
         if (size < 0) {
            ogs_error("ogs_nas_5gs_decode_pdu_session_establishment_request() failed");
-           return size;
+           return OGS_ERROR;
         }
 
         decoded += size;
@@ -5316,7 +5596,7 @@ int ogs_nas_5gsm_decode(ogs_nas_5gs_message_t *message, ogs_pkbuf_t *pkbuf)
         size = ogs_nas_5gs_decode_pdu_session_establishment_accept(message, pkbuf);
         if (size < 0) {
            ogs_error("ogs_nas_5gs_decode_pdu_session_establishment_accept() failed");
-           return size;
+           return OGS_ERROR;
         }
 
         decoded += size;
@@ -5325,7 +5605,7 @@ int ogs_nas_5gsm_decode(ogs_nas_5gs_message_t *message, ogs_pkbuf_t *pkbuf)
         size = ogs_nas_5gs_decode_pdu_session_establishment_reject(message, pkbuf);
         if (size < 0) {
            ogs_error("ogs_nas_5gs_decode_pdu_session_establishment_reject() failed");
-           return size;
+           return OGS_ERROR;
         }
 
         decoded += size;
@@ -5334,7 +5614,7 @@ int ogs_nas_5gsm_decode(ogs_nas_5gs_message_t *message, ogs_pkbuf_t *pkbuf)
         size = ogs_nas_5gs_decode_pdu_session_authentication_command(message, pkbuf);
         if (size < 0) {
            ogs_error("ogs_nas_5gs_decode_pdu_session_authentication_command() failed");
-           return size;
+           return OGS_ERROR;
         }
 
         decoded += size;
@@ -5343,7 +5623,7 @@ int ogs_nas_5gsm_decode(ogs_nas_5gs_message_t *message, ogs_pkbuf_t *pkbuf)
         size = ogs_nas_5gs_decode_pdu_session_authentication_complete(message, pkbuf);
         if (size < 0) {
            ogs_error("ogs_nas_5gs_decode_pdu_session_authentication_complete() failed");
-           return size;
+           return OGS_ERROR;
         }
 
         decoded += size;
@@ -5352,7 +5632,7 @@ int ogs_nas_5gsm_decode(ogs_nas_5gs_message_t *message, ogs_pkbuf_t *pkbuf)
         size = ogs_nas_5gs_decode_pdu_session_authentication_result(message, pkbuf);
         if (size < 0) {
            ogs_error("ogs_nas_5gs_decode_pdu_session_authentication_result() failed");
-           return size;
+           return OGS_ERROR;
         }
 
         decoded += size;
@@ -5361,7 +5641,7 @@ int ogs_nas_5gsm_decode(ogs_nas_5gs_message_t *message, ogs_pkbuf_t *pkbuf)
         size = ogs_nas_5gs_decode_pdu_session_modification_request(message, pkbuf);
         if (size < 0) {
            ogs_error("ogs_nas_5gs_decode_pdu_session_modification_request() failed");
-           return size;
+           return OGS_ERROR;
         }
 
         decoded += size;
@@ -5370,7 +5650,7 @@ int ogs_nas_5gsm_decode(ogs_nas_5gs_message_t *message, ogs_pkbuf_t *pkbuf)
         size = ogs_nas_5gs_decode_pdu_session_modification_reject(message, pkbuf);
         if (size < 0) {
            ogs_error("ogs_nas_5gs_decode_pdu_session_modification_reject() failed");
-           return size;
+           return OGS_ERROR;
         }
 
         decoded += size;
@@ -5379,7 +5659,7 @@ int ogs_nas_5gsm_decode(ogs_nas_5gs_message_t *message, ogs_pkbuf_t *pkbuf)
         size = ogs_nas_5gs_decode_pdu_session_modification_command(message, pkbuf);
         if (size < 0) {
            ogs_error("ogs_nas_5gs_decode_pdu_session_modification_command() failed");
-           return size;
+           return OGS_ERROR;
         }
 
         decoded += size;
@@ -5388,7 +5668,7 @@ int ogs_nas_5gsm_decode(ogs_nas_5gs_message_t *message, ogs_pkbuf_t *pkbuf)
         size = ogs_nas_5gs_decode_pdu_session_modification_complete(message, pkbuf);
         if (size < 0) {
            ogs_error("ogs_nas_5gs_decode_pdu_session_modification_complete() failed");
-           return size;
+           return OGS_ERROR;
         }
 
         decoded += size;
@@ -5397,7 +5677,7 @@ int ogs_nas_5gsm_decode(ogs_nas_5gs_message_t *message, ogs_pkbuf_t *pkbuf)
         size = ogs_nas_5gs_decode_pdu_session_modification_command_reject(message, pkbuf);
         if (size < 0) {
            ogs_error("ogs_nas_5gs_decode_pdu_session_modification_command_reject() failed");
-           return size;
+           return OGS_ERROR;
         }
 
         decoded += size;
@@ -5406,7 +5686,7 @@ int ogs_nas_5gsm_decode(ogs_nas_5gs_message_t *message, ogs_pkbuf_t *pkbuf)
         size = ogs_nas_5gs_decode_pdu_session_release_request(message, pkbuf);
         if (size < 0) {
            ogs_error("ogs_nas_5gs_decode_pdu_session_release_request() failed");
-           return size;
+           return OGS_ERROR;
         }
 
         decoded += size;
@@ -5415,7 +5695,7 @@ int ogs_nas_5gsm_decode(ogs_nas_5gs_message_t *message, ogs_pkbuf_t *pkbuf)
         size = ogs_nas_5gs_decode_pdu_session_release_reject(message, pkbuf);
         if (size < 0) {
            ogs_error("ogs_nas_5gs_decode_pdu_session_release_reject() failed");
-           return size;
+           return OGS_ERROR;
         }
 
         decoded += size;
@@ -5424,7 +5704,7 @@ int ogs_nas_5gsm_decode(ogs_nas_5gs_message_t *message, ogs_pkbuf_t *pkbuf)
         size = ogs_nas_5gs_decode_pdu_session_release_command(message, pkbuf);
         if (size < 0) {
            ogs_error("ogs_nas_5gs_decode_pdu_session_release_command() failed");
-           return size;
+           return OGS_ERROR;
         }
 
         decoded += size;
@@ -5433,7 +5713,7 @@ int ogs_nas_5gsm_decode(ogs_nas_5gs_message_t *message, ogs_pkbuf_t *pkbuf)
         size = ogs_nas_5gs_decode_pdu_session_release_complete(message, pkbuf);
         if (size < 0) {
            ogs_error("ogs_nas_5gs_decode_pdu_session_release_complete() failed");
-           return size;
+           return OGS_ERROR;
         }
 
         decoded += size;
@@ -5442,13 +5722,13 @@ int ogs_nas_5gsm_decode(ogs_nas_5gs_message_t *message, ogs_pkbuf_t *pkbuf)
         size = ogs_nas_5gs_decode_5gsm_status(message, pkbuf);
         if (size < 0) {
            ogs_error("ogs_nas_5gs_decode_5gsm_status() failed");
-           return size;
+           return OGS_ERROR;
         }
 
         decoded += size;
         break;
     default:
-        ogs_error("Unknown message type (0x%x) or not implemented", 
+        ogs_error("Unknown message type (0x%x) or not implemented",
                 message->gsm.h.message_type);
         break;
     }

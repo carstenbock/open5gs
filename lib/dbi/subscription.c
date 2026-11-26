@@ -370,7 +370,11 @@ int ogs_dbi_subscription_data(char *supi,
 
             bson_iter_recurse(&iter, &child1_iter);
             while (bson_iter_next(&child1_iter)) {
-                ogs_assert(msisdn_index < OGS_MAX_NUM_OF_MSISDN);
+                if (msisdn_index >= OGS_MAX_NUM_OF_MSISDN) {
+                    ogs_error("[%s] Ignore MSISDN; max %d reached",
+                            supi, OGS_MAX_NUM_OF_MSISDN);
+                    break;
+                }
 
                 if (BSON_ITER_HOLDS_UTF8(&child1_iter)) {
                     utf8 = bson_iter_utf8(&child1_iter, &length);
@@ -468,8 +472,11 @@ int ogs_dbi_subscription_data(char *supi,
                 ogs_slice_data_t *slice_data = NULL;
                 bool sst_presence = false;
 
-                ogs_assert(
-                        subscription_data->num_of_slice < OGS_MAX_NUM_OF_SLICE);
+                if (subscription_data->num_of_slice >= OGS_MAX_NUM_OF_SLICE) {
+                    ogs_error("[%s] Ignore Slice; max %d reached",
+                            supi, OGS_MAX_NUM_OF_SLICE);
+                    break;
+                }
 
                 slice_data = &subscription_data->slice[
                                 subscription_data->num_of_slice];
@@ -503,9 +510,12 @@ int ogs_dbi_subscription_data(char *supi,
                         while (bson_iter_next(&child3_iter)) {
                             ogs_session_t *session = NULL;
 
-                            ogs_assert(
-                                slice_data->num_of_session <
-                                    OGS_MAX_NUM_OF_SESS);
+                            if (slice_data->num_of_session >=
+                                    OGS_MAX_NUM_OF_SESS) {
+                                ogs_error("[%s] Ignore Session; max %d reached",
+                                        supi, OGS_MAX_NUM_OF_SESS);
+                                break;
+                            }
                             session = &slice_data->session
                                 [slice_data->num_of_session];
 
@@ -732,6 +742,18 @@ int ogs_dbi_subscription_data(char *supi,
                                     BSON_ITER_HOLDS_ARRAY(&child4_iter)) {
                                     int i;
 
+                                    /*
+                                     * Consumed by the UDR only: UDM sends
+                                     * it to the SMF in
+                                     * SessionManagementSubscriptionData
+                                     * (TS 29.503 ipv4FrameRouteList).
+                                     * The HSS ignores it - S6a cannot
+                                     * carry framed routes, so in EPC the
+                                     * PCRF delivers them over Gx instead
+                                     * (see lib/dbi/session.c and the
+                                     * comment on ogs_session_t in
+                                     * lib/proto/types.h).
+                                     */
                                     if (session->ipv4_framed_routes) {
                                         for (i = 0; i < OGS_MAX_NUM_OF_FRAMED_ROUTES_IN_PDI; i++) {
                                             if (!session->ipv4_framed_routes[i])

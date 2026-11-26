@@ -124,15 +124,11 @@ ogs_pkbuf_t *esm_build_information_request(mme_bearer_t *bearer)
             mme_ue->imsi_bcd, sess->pti, bearer->ebi);
 
     memset(&message, 0, sizeof(message));
-    message.h.security_header_type =
-       OGS_NAS_SECURITY_HEADER_INTEGRITY_PROTECTED_AND_CIPHERED;
-    message.h.protocol_discriminator = OGS_NAS_PROTOCOL_DISCRIMINATOR_EMM;
-
     message.esm.h.protocol_discriminator = OGS_NAS_PROTOCOL_DISCRIMINATOR_ESM;
     message.esm.h.procedure_transaction_identity = sess->pti;
     message.esm.h.message_type = OGS_NAS_EPS_ESM_INFORMATION_REQUEST;
 
-    return nas_eps_security_encode(mme_ue, &message);
+    return ogs_nas_eps_plain_encode(&message);
 }
 
 ogs_pkbuf_t *esm_build_activate_default_bearer_context_request(
@@ -282,11 +278,21 @@ ogs_pkbuf_t *esm_build_activate_default_bearer_context_request(
             sess->pgw_epco.data;
     } else if (sess->pgw_pco.presence && sess->pgw_pco.len &&
             sess->pgw_pco.data) {
-        activate_default_eps_bearer_context_request->presencemask |=
-            OGS_NAS_EPS_ACTIVATE_DEFAULT_EPS_BEARER_CONTEXT_REQUEST_PROTOCOL_CONFIGURATION_OPTIONS_PRESENT;
-        protocol_configuration_options->length = sess->pgw_pco.len;
-        memcpy(protocol_configuration_options->buffer,
-                sess->pgw_pco.data, protocol_configuration_options->length);
+        /* Check the original GTP length before narrowing it to a NAS
+         * octet. Do not truncate inside a PCO container. Omit this optional
+         * IE rather than fail the builder: its callers assert on failure. */
+        if (sess->pgw_pco.len >
+                sizeof(protocol_configuration_options->buffer)) {
+            ogs_error("[%s] Omit oversized PCO [len:%u,max:%zu]",
+                    mme_ue->imsi_bcd, sess->pgw_pco.len,
+                    sizeof(protocol_configuration_options->buffer));
+        } else {
+            activate_default_eps_bearer_context_request->presencemask |=
+                OGS_NAS_EPS_ACTIVATE_DEFAULT_EPS_BEARER_CONTEXT_REQUEST_PROTOCOL_CONFIGURATION_OPTIONS_PRESENT;
+            protocol_configuration_options->length = sess->pgw_pco.len;
+            memcpy(protocol_configuration_options->buffer,
+                    sess->pgw_pco.data, protocol_configuration_options->length);
+        }
     }
 
     if (create_action == OGS_GTP_CREATE_IN_ATTACH_REQUEST)
@@ -511,6 +517,35 @@ ogs_pkbuf_t *esm_build_bearer_resource_modification_reject(
         OGS_NAS_EPS_BEARER_RESOURCE_MODIFICATION_REJECT;
 
     bearer_resource_modification_reject->esm_cause = esm_cause;
+
+    return nas_eps_security_encode(mme_ue, &message);
+}
+
+ogs_pkbuf_t *esm_build_pdn_disconnect_reject(
+        mme_ue_t *mme_ue, uint8_t pti, ogs_nas_esm_cause_t esm_cause)
+{
+    ogs_nas_eps_message_t message;
+    ogs_nas_eps_pdn_disconnect_reject_t *pdn_disconnect_reject =
+        &message.esm.pdn_disconnect_reject;
+
+    ogs_assert(mme_ue);
+    ogs_assert(pti != OGS_NAS_PROCEDURE_TRANSACTION_IDENTITY_UNASSIGNED);
+
+    ogs_debug("PDN disconnect reject");
+    ogs_debug("    IMSI[%s] PTI[%d] Cause[%d]",
+            mme_ue->imsi_bcd, pti, esm_cause);
+
+    memset(&message, 0, sizeof(message));
+    message.h.security_header_type =
+       OGS_NAS_SECURITY_HEADER_INTEGRITY_PROTECTED_AND_CIPHERED;
+    message.h.protocol_discriminator = OGS_NAS_PROTOCOL_DISCRIMINATOR_EMM;
+
+    message.esm.h.eps_bearer_identity = 0;
+    message.esm.h.protocol_discriminator = OGS_NAS_PROTOCOL_DISCRIMINATOR_ESM;
+    message.esm.h.procedure_transaction_identity = pti;
+    message.esm.h.message_type = OGS_NAS_EPS_PDN_DISCONNECT_REJECT;
+
+    pdn_disconnect_reject->esm_cause = esm_cause;
 
     return nas_eps_security_encode(mme_ue, &message);
 }

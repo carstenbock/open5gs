@@ -79,9 +79,11 @@ int mme_initialize(void)
     if (rv != OGS_OK) return OGS_ERROR;
 
     /* TS 29.303 S-NAPTR PGW discovery (opt-in via mme.pgw_discovery). */
-    mme_dns_init();
 
     rv = mme_gtp_open();
+    if (rv != OGS_OK) return OGS_ERROR;
+
+    rv = mme_dns_open();
     if (rv != OGS_OK) return OGS_ERROR;
 
     rv = sgsap_open();
@@ -106,13 +108,13 @@ void mme_terminate(void)
 
     ogs_thread_destroy(thread);
 
+    mme_dns_close();
     mme_gtp_close();
     sgsap_close();
     s1ap_close();
 
     ogs_metrics_context_close(ogs_metrics_self());
 
-    mme_dns_final();
 
     mme_fd_final();
 

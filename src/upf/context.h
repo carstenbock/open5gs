@@ -49,7 +49,6 @@ struct upf_route_trie_node;
 
 typedef struct upf_context_s {
     ogs_hash_t *upf_n4_seid_hash;   /* hash table (UPF-N4-SEID) */
-    ogs_hash_t *smf_n4_seid_hash;   /* hash table (SMF-N4-SEID) */
     ogs_hash_t *smf_n4_f_seid_hash; /* hash table (SMF-N4-F-SEID) */
     ogs_hash_t *ipv4_hash;  /* hash table (IPv4 Address) */
     ogs_hash_t *ipv6_hash;  /* hash table (IPv6 Address) */
@@ -72,10 +71,13 @@ struct upf_route_trie_node {
 /* Accounting: */
 typedef struct upf_sess_urr_acc_s {
     bool reporting_enabled;
+    bool measurement_started;
     ogs_timer_t *t_validity_time; /* Quota Validity Time expiration handler */
     ogs_timer_t *t_time_quota; /* Time Quota expiration handler */
     ogs_timer_t *t_time_threshold; /* Time Threshold expiration handler */
-    uint32_t time_start; /* When t_time_* started */
+    uint32_t time_start; /* When t_time_* started (realtime, for NTP) */
+    /* When t_time_* started (monotonic, for Duration Measurement). */
+    ogs_time_t mono_time_start;
     ogs_pfcp_urr_ur_seqn_t report_seqn; /* Next seqn to use when reporting */
     uint64_t total_octets;
     uint64_t ul_octets;
@@ -93,7 +95,7 @@ typedef struct upf_sess_urr_acc_s {
         uint64_t total_pkts;
         uint64_t ul_pkts;
         uint64_t dl_pkts;
-        ogs_time_t timestamp;
+        ogs_time_t mono_timestamp; /* monotonic, for Duration Measurement */
     } last_report;
 } upf_sess_urr_acc_t;
 
@@ -137,7 +139,6 @@ upf_sess_t *upf_sess_add_by_message(ogs_pfcp_message_t *message);
 upf_sess_t *upf_sess_add(ogs_pfcp_f_seid_t *f_seid);
 int upf_sess_remove(upf_sess_t *sess);
 void upf_sess_remove_all(void);
-upf_sess_t *upf_sess_find_by_smf_n4_seid(uint64_t seid);
 upf_sess_t *upf_sess_find_by_smf_n4_f_seid(ogs_pfcp_f_seid_t *f_seid);
 upf_sess_t *upf_sess_find_by_upf_n4_seid(uint64_t seid);
 upf_sess_t *upf_sess_find_by_ipv4(uint32_t addr);
@@ -156,6 +157,8 @@ void upf_sess_urr_acc_fill_usage_report(upf_sess_t *sess, const ogs_pfcp_urr_t *
                                         ogs_pfcp_user_plane_report_t *report, unsigned int idx);
 void upf_sess_urr_acc_snapshot(upf_sess_t *sess, ogs_pfcp_urr_t *urr);
 void upf_sess_urr_acc_timers_setup(upf_sess_t *sess, ogs_pfcp_urr_t *urr);
+void upf_sess_urr_acc_remove(upf_sess_t *sess, ogs_pfcp_urr_id_t urr_id);
+void upf_sess_urr_acc_remove_all(upf_sess_t *sess);
 
 #ifdef __cplusplus
 }

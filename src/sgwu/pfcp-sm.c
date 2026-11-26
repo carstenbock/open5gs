@@ -184,8 +184,24 @@ void sgwu_pfcp_state_associated(ogs_fsm_t *s, sgwu_event_t *e)
         xact = ogs_pfcp_xact_find_by_id(e->pfcp_xact_id);
         ogs_assert(xact);
 
-        if (message->h.seid_presence && message->h.seid != 0)
+        if (message->h.seid_presence && message->h.seid != 0) {
             sess = sgwu_sess_find_by_sgwu_sxa_seid(message->h.seid);
+            /*
+             * A session belongs to the PFCP node that established it.
+             * A request for that SEID from any other node is treated
+             * as if the session did not exist, so the handlers reply
+             * with Session context not found (Cause 65).
+             */
+            if (sess && sess->pfcp_node != node) {
+                ogs_error("PFCP-Node mismatch: SGWU-SEID[0x%lx] type [%d] "
+                        "from %s", (long)message->h.seid, message->h.type,
+                        ogs_sockaddr_to_string_static(node->addr_list));
+                ogs_error("    owner %s",
+                        ogs_sockaddr_to_string_static(
+                            sess->pfcp_node->addr_list));
+                sess = NULL;
+            }
+        }
 
         switch (message->h.type) {
         case OGS_PFCP_HEARTBEAT_REQUEST_TYPE:
@@ -310,6 +326,11 @@ void sgwu_pfcp_state_associated(ogs_fsm_t *s, sgwu_event_t *e)
          * plane keeps state for orphaned bearers the restarted CP no longer
          * knows about and black-holes their downlink until a manual SGW-U
          * restart.
+         *
+         * Upstream (issue #4877) keeps the sessions here, because its SGW-C
+         * keeps its own sessions on heartbeat failure and would go on using
+         * sessions the SGW-U no longer has once the association is set up
+         * again. The deletion follows TS 23.007 16.1A.3.
          */
         pfcp_restoration(node);
         ogs_error("PFCP restoration (path failure)");

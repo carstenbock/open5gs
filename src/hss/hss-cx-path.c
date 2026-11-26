@@ -45,7 +45,7 @@ static bool hss_cx_user_name_to_bcd(
 
     bcd[0] = '\0';
 
-    for (i = 0; user_name[i]; i++) {
+    for (i = 0; user_name[i] && user_name[i] != '@'; i++) {
         if (user_name[i] >= '0' && user_name[i] <= '9') {
             if (j + 1 >= bcd_len)
                 return false;
@@ -143,6 +143,13 @@ static int hss_ogs_diam_cx_uar_cb(struct msg **msg, struct avp *avp,
         goto out;
     }
 
+    if (user_name[0] == '\0') {
+        ogs_error("Empty User-Name");
+        result_code = OGS_DIAM_INVALID_AVP_VALUE;
+        error_occurred = 1;
+        goto out;
+    }
+
     if (hss_cx_user_name_to_bcd(user_name,
                 imsi_or_msisdn_bcd, sizeof(imsi_or_msisdn_bcd)) == false) {
         ogs_error("Invalid User-Name BCD");
@@ -179,6 +186,13 @@ static int hss_ogs_diam_cx_uar_cb(struct msg **msg, struct avp *avp,
         (char*)hdr->avp_value->os.data, hdr->avp_value->os.len);
     if (!public_identity) {
         ogs_error("Failed to duplicate Public-Identity");
+        result_code = OGS_DIAM_INVALID_AVP_VALUE;
+        error_occurred = 1;
+        goto out;
+    }
+
+    if (public_identity[0] == '\0') {
+        ogs_error("Empty Public-Identity");
         result_code = OGS_DIAM_INVALID_AVP_VALUE;
         error_occurred = 1;
         goto out;
@@ -325,6 +339,7 @@ static int hss_ogs_diam_cx_uar_cb(struct msg **msg, struct avp *avp,
         if (user_name) ogs_free(user_name);
         if (public_identity) ogs_free(public_identity);
         if (visited_network_identifier) ogs_free(visited_network_identifier);
+        if (server_name) ogs_free(server_name);
 
         return 0;
     }
@@ -367,6 +382,7 @@ out:
     if (user_name) ogs_free(user_name);
     if (public_identity) ogs_free(public_identity);
     if (visited_network_identifier) ogs_free(visited_network_identifier);
+    if (server_name) ogs_free(server_name);
 
     return 0;
 }
@@ -461,6 +477,13 @@ static int hss_ogs_diam_cx_mar_cb(struct msg **msg, struct avp *avp,
         goto out;
     }
 
+    if (user_name[0] == '\0') {
+        ogs_error("Empty User-Name");
+        result_code = OGS_DIAM_INVALID_AVP_VALUE;
+        error_occurred = 1;
+        goto out;
+    }
+
     /* Get Public-Identity AVP (Mandatory) */
     ret = fd_msg_search_avp(qry, ogs_diam_cx_public_identity, &avp);
     if (ret != 0) {
@@ -489,6 +512,13 @@ static int hss_ogs_diam_cx_mar_cb(struct msg **msg, struct avp *avp,
         (char*)hdr->avp_value->os.data, hdr->avp_value->os.len);
     if (!public_identity) {
         ogs_error("Failed to duplicate Public-Identity");
+        result_code = OGS_DIAM_INVALID_AVP_VALUE;
+        error_occurred = 1;
+        goto out;
+    }
+
+    if (public_identity[0] == '\0') {
+        ogs_error("Empty Public-Identity");
         result_code = OGS_DIAM_INVALID_AVP_VALUE;
         error_occurred = 1;
         goto out;
@@ -637,6 +667,16 @@ static int hss_ogs_diam_cx_mar_cb(struct msg **msg, struct avp *avp,
     if (ret == 0 && sip_authorization_avp) {
         ret = fd_msg_avp_hdr(sip_authorization_avp, &hdr);
         if (ret == 0 && hdr) {
+            if (!hdr->avp_value || !hdr->avp_value->os.data ||
+                    hdr->avp_value->os.len !=
+                    OGS_RAND_LEN + OGS_AUTS_LEN) {
+                ogs_error("Invalid SIP-Authorization length [%d]",
+                        hdr->avp_value ?
+                        (int)hdr->avp_value->os.len : -1);
+                result_code = OGS_DIAM_INVALID_AVP_VALUE;
+                error_occurred = 1;
+                goto out;
+            }
             ogs_auc_sqn(opc, auth_info.k,
                     hdr->avp_value->os.data,
                     hdr->avp_value->os.data + OGS_RAND_LEN,
@@ -1107,6 +1147,13 @@ static int hss_ogs_diam_cx_sar_cb(struct msg **msg, struct avp *avp,
         goto out;
     }
 
+    if (public_identity[0] == '\0') {
+        ogs_error("Empty Public-Identity");
+        result_code = OGS_DIAM_INVALID_AVP_VALUE;
+        error_occurred = 1;
+        goto out;
+    }
+
     /* Get Server-Name AVP (Mandatory) */
     ret = fd_msg_search_avp(qry, ogs_diam_cx_server_name, &avp);
     if (ret != 0) {
@@ -1155,6 +1202,13 @@ static int hss_ogs_diam_cx_sar_cb(struct msg **msg, struct avp *avp,
             (char*)hdr->avp_value->os.data, hdr->avp_value->os.len);
         if (!user_name) {
             ogs_error("Failed to duplicate User-Name");
+            result_code = OGS_DIAM_INVALID_AVP_VALUE;
+            error_occurred = 1;
+            goto out;
+        }
+
+        if (user_name[0] == '\0') {
+            ogs_error("Empty User-Name");
             result_code = OGS_DIAM_INVALID_AVP_VALUE;
             error_occurred = 1;
             goto out;
@@ -1346,13 +1400,14 @@ static int hss_ogs_diam_cx_sar_cb(struct msg **msg, struct avp *avp,
                 goto out;
             }
 
-            if (hdr->avp_value->i32 ==
+            /* Restore MSISDN identities even if the S-CSCF has the profile. */
+            hss_cx_associate_msisdn(
+                    user_name, visited_network_identifier, &ims_data);
+
+            if (hdr->avp_value->i32 !=
                     OGS_DIAM_CX_USER_DATA_ALREADY_AVAILABLE) {
-                /* Nothing to do */
-            } else {
                 /* Set the User-Data AVP */
-                user_data = hss_cx_download_user_data(
-                        user_name, visited_network_identifier, &ims_data);
+                user_data = hss_cx_download_user_data(user_name, &ims_data);
                 if (!user_data) {
                     ogs_error("Failed to download user data");
                     result_code = OGS_DIAM_CX_ERROR_USER_UNKNOWN;
@@ -1449,6 +1504,7 @@ static int hss_ogs_diam_cx_sar_cb(struct msg **msg, struct avp *avp,
         if (user_name) ogs_free(user_name);
         if (public_identity) ogs_free(public_identity);
         if (server_name) ogs_free(server_name);
+        if (visited_network_identifier) ogs_free(visited_network_identifier);
 
         return 0;
     }
@@ -1492,6 +1548,7 @@ out:
     if (user_name) ogs_free(user_name);
     if (public_identity) ogs_free(public_identity);
     if (server_name) ogs_free(server_name);
+    if (visited_network_identifier) ogs_free(visited_network_identifier);
 
     return 0;
 }
@@ -1556,6 +1613,13 @@ static int hss_ogs_diam_cx_lir_cb(struct msg **msg, struct avp *avp,
         (char*)hdr->avp_value->os.data, hdr->avp_value->os.len);
     if (!public_identity) {
         ogs_error("Failed to duplicate Public-Identity");
+        result_code = OGS_DIAM_INVALID_AVP_VALUE;
+        error_occurred = 1;
+        goto out;
+    }
+
+    if (public_identity[0] == '\0') {
+        ogs_error("Empty Public-Identity");
         result_code = OGS_DIAM_INVALID_AVP_VALUE;
         error_occurred = 1;
         goto out;
@@ -1650,6 +1714,7 @@ static int hss_ogs_diam_cx_lir_cb(struct msg **msg, struct avp *avp,
 
         /* Cleanup resources */
         if (public_identity) ogs_free(public_identity);
+        if (server_name) ogs_free(server_name);
 
         return 0;
     }
@@ -1703,6 +1768,7 @@ out:
 
     /* Cleanup resources */
     if (public_identity) ogs_free(public_identity);
+    if (server_name) ogs_free(server_name);
 
     return 0;
 }

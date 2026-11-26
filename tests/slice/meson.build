@@ -20,6 +20,8 @@ test5gc_slice_sources = files('''
     same-dnn-test.c
     different-dnn-test.c
     paging-test.c
+    identity-test.c
+    holding-test.c
 '''.split())
 
 test5gc_slice_exe = executable('slice',
@@ -30,4 +32,4 @@ test5gc_slice_exe = executable('slice',
 test('slice',
     test5gc_slice_exe,
     is_parallel : false,
-    suite: '5gc')
+    suite: ['slice', '5gc'])

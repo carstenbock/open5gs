@@ -87,6 +87,7 @@
 #include "model/app_session_context_update_data_patch.h"
 #include "model/policy_update.h"
 #include "model/sm_policy_notification.h"
+#include "model/termination_info.h"
 #include "model/termination_notification.h"
 #include "model/deregistration_data.h"
 #include "model/sdm_subscription.h"
@@ -101,6 +102,7 @@
 #include "model/ue_reg_status_update_rsp_data.h"
 #include "model/status_notification.h"
 #include "model/provisioned_data_sets.h"
+#include "model/eir_response_data.h"
 
 #include "custom/links.h"
 

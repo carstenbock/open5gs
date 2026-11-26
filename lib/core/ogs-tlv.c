@@ -101,7 +101,7 @@ uint32_t ogs_tlv_value_32(ogs_tlv_t *tlv)
     uint32_t u_32;
     uint8_t *v = tlv->value;
 
-    u_32 = ((v[0] << 24) & 0xff000000) |
+    u_32 = (((uint32_t)v[0] << 24) & 0xff000000) |
            ((v[1] << 16) & 0x00ff0000) |
            ((v[2] <<  8) & 0x0000ff00) |
            ((v[3]      ) & 0x000000ff);
@@ -219,35 +219,52 @@ static uint8_t *tlv_put_instance(uint8_t instance, uint8_t *pos, uint8_t mode)
     return pos;
 }
 
-uint8_t *tlv_get_element(ogs_tlv_t *tlv, uint8_t *blk, uint8_t mode)
+uint8_t *tlv_get_element(ogs_tlv_t *tlv, uint8_t *blk,
+        uint32_t size, uint8_t mode)
 {
     uint8_t *pos = blk;
+    uint32_t header_length;
 
     tlv->mode = mode;
 
     switch(mode) {
     case OGS_TLV_MODE_T1_L1:
+        header_length = 2;
+        if (size < header_length)
+            return NULL;
         tlv->type = *(pos++);
         tlv->length = *(pos++);
         break;
     case OGS_TLV_MODE_T1_L2:
+        header_length = 3;
+        if (size < header_length)
+            return NULL;
         tlv->type = *(pos++);
         tlv->length = *(pos++) << 8;
         tlv->length += *(pos++);
         break;
     case OGS_TLV_MODE_T1_L2_I1:
+        header_length = 4;
+        if (size < header_length)
+            return NULL;
         tlv->type = *(pos++);
         tlv->length = *(pos++) << 8;
         tlv->length += *(pos++);
         tlv->instance = *(pos++) & 0b00001111;
         break;
     case OGS_TLV_MODE_T2_L2:
+        header_length = 4;
+        if (size < header_length)
+            return NULL;
         tlv->type = *(pos++) << 8;
         tlv->type += *(pos++);
         tlv->length = *(pos++) << 8;
         tlv->length += *(pos++);
         break;
     case OGS_TLV_MODE_T1:
+        header_length = 1;
+        if (size < header_length)
+            return NULL;
         tlv->type = *(pos++);
         tlv->length = 0;
         break;
@@ -256,17 +273,23 @@ uint8_t *tlv_get_element(ogs_tlv_t *tlv, uint8_t *blk, uint8_t mode)
         break;
     }
 
+    if (tlv->length > size - header_length)
+        return NULL;
+
     tlv->value = pos;
 
     return (pos + ogs_tlv_length(tlv));
 }
 
-uint8_t *tlv_get_element_fixed(ogs_tlv_t *tlv, uint8_t *blk, uint8_t mode, uint32_t fixed_length)
+uint8_t *tlv_get_element_fixed(ogs_tlv_t *tlv, uint8_t *blk,
+        uint32_t size, uint8_t mode, uint32_t fixed_length)
 {
     uint8_t *pos = blk;
 
     switch(mode) {
     case OGS_TLV_MODE_T1:
+        if (size < 1 || fixed_length > size - 1)
+            return NULL;
         tlv->type = *(pos++);
         tlv->length = fixed_length;
         break;
@@ -311,21 +334,22 @@ ogs_tlv_t *ogs_tlv_add(ogs_tlv_t *head, uint8_t mode,
 
     new = ogs_tlv_get();
     ogs_assert(new);
-    if(length != 0)
-        ogs_assert(value);
 
     new->mode = mode;
     new->type = type;
     new->length = length;
     new->instance = instance;
-    new->value = value;
+    new->value = length ? value : NULL;
 
-    if (head != NULL && head->buff_allocated == true) {
-        ogs_assert((head->buff_ptr - head->buff + length) < head->buff_len);
+    if(length > 0) {
+        ogs_assert(value);
+        if (head != NULL && head->buff_allocated == true) {
+            ogs_assert((head->buff_ptr - head->buff + length) < head->buff_len);
 
-        memcpy(head->buff_ptr, value, length);
-        new->value = head->buff_ptr;
-        head->buff_ptr += length;
+            memcpy(head->buff_ptr, value, length);
+            new->value = head->buff_ptr;
+            head->buff_ptr += length;
+        }
     }
 
     if(curr == NULL) {
@@ -419,7 +443,8 @@ uint32_t ogs_tlv_render(ogs_tlv_t *root, void *data, uint32_t length)
             if ((pos - blk) + ogs_tlv_length(curr) > length)
                 ogs_assert_if_reached();
 
-            memcpy((char*)pos, (char*)curr->value, curr->length);
+            if (curr->length > 0)
+                memcpy((char*)pos, (char*)curr->value, curr->length);
             pos += curr->length;
         } else {
             embedded_len = ogs_tlv_calc_length(curr->embedded);
@@ -458,7 +483,7 @@ ogs_tlv_t *ogs_tlv_parse_block(uint32_t length, void *data, uint8_t mode)
         return NULL;
     }
 
-    pos = tlv_get_element(curr, pos, mode);
+    pos = tlv_get_element(curr, pos, length - (uint32_t)(pos - blk), mode);
     if (!pos) {
         ogs_error("ogs_tlv_parse_block() failed[LEN:%u,MODE:%u] - parse error",
                 length, mode);
@@ -491,7 +516,7 @@ ogs_tlv_t *ogs_tlv_parse_block(uint32_t length, void *data, uint8_t mode)
         }
         prev->next = curr;
 
-        pos = tlv_get_element(curr, pos, mode);
+        pos = tlv_get_element(curr, pos, length - (uint32_t)(pos - blk), mode);
         if (!pos) {
             ogs_error("ogs_tlv_parse_block() failed[LEN:%d,MODE:%d]",
                     length, mode);

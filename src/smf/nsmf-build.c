@@ -264,7 +264,7 @@ ogs_sbi_request_t *smf_nsmf_pdusession_build_create_data(
                 PduSessionCreateData.max_integrity_protected_data_rate_dl =
                     OpenAPI_max_integrity_protected_data_rate_MAX_UE_RATE;
                 break;
-            defadlt:
+            default:
                 ogs_error("Unknown Integrity Protection "
                         "Maximum Data Rate [DL:%d]",
                         integrity_protection_maximum_data_rate->dl);
@@ -494,6 +494,9 @@ end:
         sess->n1SmBufFromUe = NULL;
     }
 
+    if (n1SmBufFromUe)
+        ogs_pkbuf_free(n1SmBufFromUe);
+
     return request;
 }
 
@@ -609,15 +612,8 @@ ogs_sbi_request_t *smf_nsmf_pdusession_build_vsmf_update_data(
                     goto end;
                 }
 
-                enc_len = ogs_base64_encoded_size(
-                        authorized_qos_flow_descriptions.length);
-                ogs_assert(enc_len > 0);
-                encoded_qos_flow_description = ogs_calloc(1, enc_len);
-                ogs_assert(encoded_qos_flow_description);
-                ogs_assert(ogs_base64_encode_from_buffer(
-                        encoded_qos_flow_description, enc_len,
-                        authorized_qos_flow_descriptions.buffer,
-                        authorized_qos_flow_descriptions.length) > 0);
+                encoded_qos_flow_description = gsm_encode_qos_flow_description_ie(
+                        &authorized_qos_flow_descriptions);
 
                 ogs_free(authorized_qos_flow_descriptions.buffer);
             }
@@ -768,6 +764,9 @@ end:
     CLEAR_QOS_FLOWS_ADD_MOD_REQUEST_LIST(
             VsmfUpdateData.qos_flows_add_mod_request_list);
     CLEAR_QOS_FLOWS_REL_REQUEST_LIST(VsmfUpdateData.qos_flows_rel_request_list);
+
+    if (n1SmBufToUe)
+        ogs_pkbuf_free(n1SmBufToUe);
 
     return request;
 }

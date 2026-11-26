@@ -541,7 +541,7 @@ static void test5_func(abts_case *tc, void *data)
     uint8_t parent_block[4000];
     uint8_t *pos = NULL;
     uint16_t c_16 = 0x1122;
-    uint32_t c_32 = 0x11223344;
+    uint32_t c_32 = 0x81223344U;
     uint8_t mode = (uintptr_t)data;
 
     /* tlv encoding for test */
@@ -571,7 +571,7 @@ static void test5_func(abts_case *tc, void *data)
         ABTS_INT_EQUAL(tc, *(pos++), 20);
         ABTS_INT_EQUAL(tc, *(pos++), 0);
         ABTS_INT_EQUAL(tc, *(pos++), 4);
-        ABTS_INT_EQUAL(tc, *(pos++), 0x11);
+        ABTS_INT_EQUAL(tc, *(pos++), 0x81);
         ABTS_INT_EQUAL(tc, *(pos++), 0x22);
         ABTS_INT_EQUAL(tc, *(pos++), 0x33);
         ABTS_INT_EQUAL(tc, *(pos++), 0x44);
@@ -585,7 +585,7 @@ static void test5_func(abts_case *tc, void *data)
         ABTS_INT_EQUAL(tc, *(pos++), 20);
         ABTS_INT_EQUAL(tc, *(pos++), 0);
         ABTS_INT_EQUAL(tc, *(pos++), 4);
-        ABTS_INT_EQUAL(tc, *(pos++), 0x11);
+        ABTS_INT_EQUAL(tc, *(pos++), 0x81);
         ABTS_INT_EQUAL(tc, *(pos++), 0x22);
         ABTS_INT_EQUAL(tc, *(pos++), 0x33);
         ABTS_INT_EQUAL(tc, *(pos++), 0x44);
@@ -601,7 +601,7 @@ static void test5_func(abts_case *tc, void *data)
         ABTS_INT_EQUAL(tc, *(pos++), 0);
         ABTS_INT_EQUAL(tc, *(pos++), 4);
         ABTS_INT_EQUAL(tc, *(pos++), 0);
-        ABTS_INT_EQUAL(tc, *(pos++), 0x11);
+        ABTS_INT_EQUAL(tc, *(pos++), 0x81);
         ABTS_INT_EQUAL(tc, *(pos++), 0x22);
         ABTS_INT_EQUAL(tc, *(pos++), 0x33);
         ABTS_INT_EQUAL(tc, *(pos++), 0x44);
@@ -613,7 +613,7 @@ static void test5_func(abts_case *tc, void *data)
         ABTS_INT_EQUAL(tc, *(pos++), 0x22);
         ABTS_INT_EQUAL(tc, *(pos++), 20);
         ABTS_INT_EQUAL(tc, *(pos++), 4);
-        ABTS_INT_EQUAL(tc, *(pos++), 0x11);
+        ABTS_INT_EQUAL(tc, *(pos++), 0x81);
         ABTS_INT_EQUAL(tc, *(pos++), 0x22);
         ABTS_INT_EQUAL(tc, *(pos++), 0x33);
         ABTS_INT_EQUAL(tc, *(pos++), 0x44);
@@ -627,12 +627,73 @@ static void test5_func(abts_case *tc, void *data)
         mode);
     ABTS_INT_EQUAL(tc, ogs_tlv_value_16(p_tlv), 0x1122);
     p_tlv = parsed_tlv->next;
-    ABTS_INT_EQUAL(tc, ogs_tlv_value_32(p_tlv), 0x11223344);
+    ABTS_SIZE_EQUAL(tc, 0x81223344U, ogs_tlv_value_32(p_tlv));
 
     ogs_tlv_free_all(parsed_tlv);
     ABTS_INT_EQUAL(tc, ogs_tlv_pool_avail(), ogs_core()->tlv.pool);
 
     return;
+}
+
+typedef struct {
+    ogs_tlv_presence_t presence;
+    ogs_tlv_uint32_t value;
+} tlv_uint32_group_t;
+
+typedef struct {
+    ogs_tlv_uint32_t value;
+    tlv_uint32_group_t group;
+} tlv_uint32_message_t;
+
+static ogs_tlv_desc_t tlv_desc_uint32_value = {
+    OGS_TLV_UINT32, "UInt32 Value", 1, 4, 3,
+    sizeof(ogs_tlv_uint32_t), { NULL }
+};
+
+static ogs_tlv_desc_t tlv_desc_uint32_group = {
+    OGS_TLV_COMPOUND, "Group", 2, 0, 0, sizeof(tlv_uint32_group_t),
+    { &tlv_desc_uint32_value, NULL }
+};
+
+static ogs_tlv_desc_t tlv_desc_uint32_message = {
+    OGS_TLV_MESSAGE, "UInt32 Message", 0, 0, 0, 0,
+    { &tlv_desc_uint32_value, &tlv_desc_uint32_group, NULL }
+};
+
+static void test_uint32_func(abts_case *tc, void *data)
+{
+    static const uint8_t encoded[] = {
+        1, 0, 4, 3, 0x81, 0x22, 0x33, 0x44,
+        2, 0, 8, 0,
+        1, 0, 4, 3, 0x55, 0x66, 0x77, 0x88
+    };
+    tlv_uint32_message_t message;
+    ogs_pkbuf_t *pkbuf = NULL;
+    int rv;
+
+    pkbuf = ogs_pkbuf_alloc(NULL, sizeof(encoded));
+    ABTS_PTR_NOTNULL(tc, pkbuf);
+    ogs_pkbuf_put_data(pkbuf, encoded, sizeof(encoded));
+
+    memset(&message, 0, sizeof(message));
+    rv = ogs_tlv_parse_msg(&message, &tlv_desc_uint32_message, pkbuf,
+            OGS_TLV_MODE_T1_L2_I1);
+    ABTS_INT_EQUAL(tc, OGS_OK, rv);
+    ABTS_INT_EQUAL(tc, 1, message.value.presence);
+    ABTS_SIZE_EQUAL(tc, 0x81223344U, message.value.u32);
+    ABTS_INT_EQUAL(tc, 1, message.group.value.presence);
+    ABTS_SIZE_EQUAL(tc, 0x55667788U, message.group.value.u32);
+    ogs_pkbuf_free(pkbuf);
+
+    pkbuf = ogs_tlv_build_msg(&tlv_desc_uint32_message, &message,
+            OGS_TLV_MODE_T1_L2_I1);
+    ABTS_PTR_NOTNULL(tc, pkbuf);
+    if (pkbuf) {
+        ABTS_SIZE_EQUAL(tc, sizeof(encoded), pkbuf->len);
+        if (pkbuf->len == sizeof(encoded))
+            ABTS_TRUE(tc, memcmp(pkbuf->data, encoded, sizeof(encoded)) == 0);
+        ogs_pkbuf_free(pkbuf);
+    }
 }
 
 /* Sample header for tlv_msg */
@@ -852,6 +913,309 @@ static void test6_func(abts_case *tc, void *data)
     ogs_pkbuf_free(req);
 }
 
+/*
+ * Bounds tests for the TLV block parser.
+ *
+ * The buffers below are allocated with the exact block size on purpose,
+ * using plain malloc() rather than ogs_malloc().  ogs_malloc() is backed
+ * by talloc, which places the user data inside a larger chunk, so an
+ * over-read of a few octets would stay within the allocation and no
+ * sanitizer would report it.  The same is true of a pkbuf, whose cluster
+ * is rounded up to a fixed bucket size.  An exact-size heap buffer is
+ * what makes these cases visible under ASAN.
+ */
+static const struct {
+    uint8_t mode;
+    uint32_t header_length;
+} tlv_bounds_mode[] = {
+    { OGS_TLV_MODE_T1_L1,    2 },
+    { OGS_TLV_MODE_T1_L2,    3 },
+    { OGS_TLV_MODE_T1_L2_I1, 4 },
+    { OGS_TLV_MODE_T2_L2,    4 },
+};
+
+static void tlv_bounds_put_header(
+        uint8_t *blk, uint8_t mode, uint16_t type, uint16_t length)
+{
+    switch (mode) {
+    case OGS_TLV_MODE_T1_L1:
+        blk[0] = type & 0xff;
+        blk[1] = length & 0xff;
+        break;
+    case OGS_TLV_MODE_T1_L2:
+        blk[0] = type & 0xff;
+        blk[1] = (length >> 8) & 0xff;
+        blk[2] = length & 0xff;
+        break;
+    case OGS_TLV_MODE_T1_L2_I1:
+        blk[0] = type & 0xff;
+        blk[1] = (length >> 8) & 0xff;
+        blk[2] = length & 0xff;
+        blk[3] = 0;
+        break;
+    case OGS_TLV_MODE_T2_L2:
+        blk[0] = (type >> 8) & 0xff;
+        blk[1] = type & 0xff;
+        blk[2] = (length >> 8) & 0xff;
+        blk[3] = length & 0xff;
+        break;
+    default:
+        ogs_assert_if_reached();
+        break;
+    }
+}
+
+/* Truncated TLV header must be rejected before any octet is read. */
+static void test7_func(abts_case *tc, void *data)
+{
+    unsigned int i;
+    uint32_t size;
+    ogs_tlv_t tlv;
+    uint8_t *blk = NULL;
+    int id = ogs_log_get_domain_id("tlv");
+    ogs_log_level_e level = ogs_log_get_domain_level(id);
+    int core_id = ogs_log_get_domain_id("core");
+    ogs_log_level_e core_level = ogs_log_get_domain_level(core_id);
+
+    for (i = 0; i < OGS_ARRAY_SIZE(tlv_bounds_mode); i++) {
+        uint8_t mode = tlv_bounds_mode[i].mode;
+        uint32_t header_length = tlv_bounds_mode[i].header_length;
+
+        /*
+         * size == 0 is the embedded path : a grouped IE carrying
+         * length 0 reaches ogs_tlv_parse_block() with length == 0,
+         * which used to read a full header before the loop was
+         * even entered.
+         */
+        for (size = 0; size < header_length; size++) {
+            blk = malloc(size ? size : 1);
+            ABTS_PTR_NOTNULL(tc, blk);
+            memset(blk, 0, size ? size : 1);
+
+            memset(&tlv, 0, sizeof(tlv));
+            ABTS_PTR_EQUAL(tc, NULL,
+                    tlv_get_element(&tlv, blk, size, mode));
+            if (level >= OGS_LOG_ERROR && level < OGS_LOG_DEBUG)
+                ogs_log_set_domain_level(id, OGS_LOG_FATAL);
+            if (core_level >= OGS_LOG_ERROR && core_level < OGS_LOG_DEBUG)
+                ogs_log_set_domain_level(core_id, OGS_LOG_FATAL);
+            ABTS_PTR_EQUAL(tc, NULL,
+                    ogs_tlv_parse_block(size, blk, mode));
+            ogs_log_set_domain_level(id, level);
+            ogs_log_set_domain_level(core_id, core_level);
+
+            free(blk);
+        }
+
+        /* A header that just fits must still be accepted. */
+        blk = malloc(header_length);
+        ABTS_PTR_NOTNULL(tc, blk);
+        tlv_bounds_put_header(blk, mode, 1, 0);
+
+        memset(&tlv, 0, sizeof(tlv));
+        ABTS_PTR_EQUAL(tc, blk + header_length,
+                tlv_get_element(&tlv, blk, header_length, mode));
+        ABTS_INT_EQUAL(tc, 0, tlv.length);
+
+        free(blk);
+    }
+
+    /* TV : one octet of tag followed by a fixed-length value. */
+    blk = malloc(2);
+    ABTS_PTR_NOTNULL(tc, blk);
+    blk[0] = 1;
+    blk[1] = 0xaa;
+
+    memset(&tlv, 0, sizeof(tlv));
+    ABTS_PTR_EQUAL(tc, NULL,
+            tlv_get_element_fixed(&tlv, blk, 0, OGS_TLV_MODE_T1, 1));
+    memset(&tlv, 0, sizeof(tlv));
+    ABTS_PTR_EQUAL(tc, NULL,
+            tlv_get_element_fixed(&tlv, blk, 1, OGS_TLV_MODE_T1, 1));
+    memset(&tlv, 0, sizeof(tlv));
+    ABTS_PTR_EQUAL(tc, blk + 2,
+            tlv_get_element_fixed(&tlv, blk, 2, OGS_TLV_MODE_T1, 1));
+    ABTS_INT_EQUAL(tc, 1, tlv.length);
+
+    free(blk);
+
+    ABTS_INT_EQUAL(tc, ogs_tlv_pool_avail(), ogs_core()->tlv.pool);
+}
+
+/* Trailing octets and over-long values must be rejected. */
+static void test8_func(abts_case *tc, void *data)
+{
+    unsigned int i;
+    ogs_tlv_t tlv;
+    ogs_tlv_t *root = NULL;
+    uint8_t *blk = NULL;
+    uint32_t size;
+    int id = ogs_log_get_domain_id("tlv");
+    ogs_log_level_e level = ogs_log_get_domain_level(id);
+    int core_id = ogs_log_get_domain_id("core");
+    ogs_log_level_e core_level = ogs_log_get_domain_level(core_id);
+
+    for (i = 0; i < OGS_ARRAY_SIZE(tlv_bounds_mode); i++) {
+        uint8_t mode = tlv_bounds_mode[i].mode;
+        uint32_t header_length = tlv_bounds_mode[i].header_length;
+
+        /* One well-formed TLV : must parse. */
+        size = header_length + 2;
+        blk = malloc(size);
+        ABTS_PTR_NOTNULL(tc, blk);
+        memset(blk, 0, size);
+        tlv_bounds_put_header(blk, mode, 1, 2);
+
+        root = ogs_tlv_parse_block(size, blk, mode);
+        ABTS_PTR_NOTNULL(tc, root);
+        if (root) {
+            ABTS_INT_EQUAL(tc, 1, root->type);
+            ABTS_INT_EQUAL(tc, 2, root->length);
+            ABTS_PTR_EQUAL(tc, blk + header_length, root->value);
+            ABTS_PTR_EQUAL(tc, NULL, root->next);
+            ogs_tlv_free_all(root);
+        }
+        free(blk);
+
+        /*
+         * Same TLV followed by a single stray octet.  The loop is
+         * entered because one octet is left, and the next header must
+         * not be read past the end of the block.
+         */
+        size = header_length + 2 + 1;
+        blk = malloc(size);
+        ABTS_PTR_NOTNULL(tc, blk);
+        memset(blk, 0, size);
+        tlv_bounds_put_header(blk, mode, 1, 2);
+
+        if (level >= OGS_LOG_ERROR && level < OGS_LOG_DEBUG)
+            ogs_log_set_domain_level(id, OGS_LOG_FATAL);
+        if (core_level >= OGS_LOG_ERROR && core_level < OGS_LOG_DEBUG)
+            ogs_log_set_domain_level(core_id, OGS_LOG_FATAL);
+        ABTS_PTR_EQUAL(tc, NULL, ogs_tlv_parse_block(size, blk, mode));
+        ogs_log_set_domain_level(id, level);
+        ogs_log_set_domain_level(core_id, core_level);
+        free(blk);
+
+        /* Declared value length larger than the remaining block. */
+        size = header_length + 1;
+        blk = malloc(size);
+        ABTS_PTR_NOTNULL(tc, blk);
+        memset(blk, 0, size);
+        tlv_bounds_put_header(blk, mode, 1, 2);
+
+        memset(&tlv, 0, sizeof(tlv));
+        ABTS_PTR_EQUAL(tc, NULL,
+                tlv_get_element(&tlv, blk, size, mode));
+        if (level >= OGS_LOG_ERROR && level < OGS_LOG_DEBUG)
+            ogs_log_set_domain_level(id, OGS_LOG_FATAL);
+        if (core_level >= OGS_LOG_ERROR && core_level < OGS_LOG_DEBUG)
+            ogs_log_set_domain_level(core_id, OGS_LOG_FATAL);
+        ABTS_PTR_EQUAL(tc, NULL, ogs_tlv_parse_block(size, blk, mode));
+        ogs_log_set_domain_level(id, level);
+        ogs_log_set_domain_level(core_id, core_level);
+        free(blk);
+    }
+
+    ABTS_INT_EQUAL(tc, ogs_tlv_pool_avail(), ogs_core()->tlv.pool);
+}
+
+/*
+ * Same bounds, but through ogs_tlv_parse_msg_desc(), which walks the
+ * block with its own loop in ogs_tlv_parse_block_desc().  A pkbuf
+ * allocated from a NULL pool is sized exactly, unlike one taken from a
+ * pool whose cluster is rounded up to a bucket, so an over-read here is
+ * visible to a sanitizer.
+ */
+static void test9_func(abts_case *tc, void *data)
+{
+    tlv_attach_req reqv;
+    tlv_attach_req reqv2;
+    ogs_pkbuf_t *req = NULL;
+    ogs_pkbuf_t *built = NULL;
+    int rv;
+    int id = ogs_log_get_domain_id("core");
+    ogs_log_level_e level = ogs_log_get_domain_level(id);
+
+    memset(&reqv, 0, sizeof(tlv_attach_req));
+
+    reqv.client_info.presence = 1;
+    reqv.client_info.client_security_history.presence = 1;
+    reqv.client_info.client_security_history.
+            authorization_policy_support0.presence = 1;
+    reqv.client_info.client_security_history.
+            authorization_policy_support0.u8 = 0x3;
+
+    /* Intact message : must parse. */
+    req = ogs_tlv_build_msg(&tlv_desc_attach_req, &reqv, OGS_TLV_MODE_T1_L2_I1);
+    ABTS_PTR_NOTNULL(tc, req);
+
+    memset(&reqv2, 0, sizeof(tlv_attach_req));
+    rv = ogs_tlv_parse_msg_desc(&reqv2, &tlv_desc_attach_req, req,
+            OGS_TLV_MODE_T1_L2_I1);
+    ABTS_INT_EQUAL(tc, OGS_OK, rv);
+    ABTS_INT_EQUAL(tc, 1, reqv2.client_info.presence);
+    ogs_pkbuf_free(req);
+
+    /*
+     * One stray octet appended : the trailing header is incomplete.
+     * The octet has to carry a tag the descriptor knows, otherwise
+     * tlv_get_element_desc() stops at the descriptor lookup and the
+     * length check is never reached.
+     */
+    built = ogs_tlv_build_msg(&tlv_desc_attach_req, &reqv, OGS_TLV_MODE_T1_L2_I1);
+    ABTS_PTR_NOTNULL(tc, built);
+    req = ogs_pkbuf_alloc(NULL, built->len + 1);
+    ABTS_PTR_NOTNULL(tc, req);
+    ogs_pkbuf_put_data(req, built->data, built->len);
+    ogs_pkbuf_put_u8(req, TLV_CLIENT_INFO_TYPE);
+    ogs_pkbuf_free(built);
+
+    memset(&reqv2, 0, sizeof(tlv_attach_req));
+    if (level >= OGS_LOG_ERROR && level < OGS_LOG_DEBUG)
+        ogs_log_set_domain_level(id, OGS_LOG_FATAL);
+    rv = ogs_tlv_parse_msg_desc(&reqv2, &tlv_desc_attach_req, req,
+            OGS_TLV_MODE_T1_L2_I1);
+    ogs_log_set_domain_level(id, level);
+    ABTS_INT_EQUAL(tc, OGS_ERROR, rv);
+    ogs_pkbuf_free(req);
+
+    /* Last octet removed : the trailing value is incomplete. */
+    req = ogs_tlv_build_msg(&tlv_desc_attach_req, &reqv, OGS_TLV_MODE_T1_L2_I1);
+    ABTS_PTR_NOTNULL(tc, req);
+    ogs_pkbuf_trim(req, req->len - 1);
+
+    memset(&reqv2, 0, sizeof(tlv_attach_req));
+    if (level >= OGS_LOG_ERROR && level < OGS_LOG_DEBUG)
+        ogs_log_set_domain_level(id, OGS_LOG_FATAL);
+    rv = ogs_tlv_parse_msg_desc(&reqv2, &tlv_desc_attach_req, req,
+            OGS_TLV_MODE_T1_L2_I1);
+    ogs_log_set_domain_level(id, level);
+    ABTS_INT_EQUAL(tc, OGS_ERROR, rv);
+    ogs_pkbuf_free(req);
+
+    /*
+     * A single octet in OGS_TLV_MODE_T2_L2, the mode PFCP uses.  The
+     * tag alone is two octets there, and it is read before the
+     * descriptor is even looked up, so the block has to be measured
+     * first.
+     */
+    req = ogs_pkbuf_alloc(NULL, 1);
+    ABTS_PTR_NOTNULL(tc, req);
+    ogs_pkbuf_put_u8(req, 0);
+
+    memset(&reqv2, 0, sizeof(tlv_attach_req));
+    if (level >= OGS_LOG_ERROR && level < OGS_LOG_DEBUG)
+        ogs_log_set_domain_level(id, OGS_LOG_FATAL);
+    rv = ogs_tlv_parse_msg_desc(&reqv2, &tlv_desc_attach_req, req,
+            OGS_TLV_MODE_T2_L2);
+    ogs_log_set_domain_level(id, level);
+    ABTS_INT_EQUAL(tc, OGS_ERROR, rv);
+    ogs_pkbuf_free(req);
+
+    ABTS_INT_EQUAL(tc, ogs_tlv_pool_avail(), ogs_core()->tlv.pool);
+}
+
 abts_suite *test_tlv(abts_suite *suite)
 {
     suite = ADD_SUITE(suite)
@@ -875,6 +1239,11 @@ abts_suite *test_tlv(abts_suite *suite)
     abts_run_test(suite, test5_func, (void*)OGS_TLV_MODE_T1_L2_I1);
 
     abts_run_test(suite, test6_func, NULL);
+    abts_run_test(suite, test_uint32_func, NULL);
+
+    abts_run_test(suite, test7_func, NULL);
+    abts_run_test(suite, test8_func, NULL);
+    abts_run_test(suite, test9_func, NULL);
 
     return suite;
 }

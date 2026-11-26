@@ -401,6 +401,12 @@ void smf_bearer_binding(smf_sess_t *sess)
 
                 rv = ogs_ipfw_compile_rule(
                         &pf->ipfw_rule, pf->flow_description);
+                if (rv != OGS_OK) {
+                    ogs_error("Invalid Flow-Description[%s]",
+                            pf->flow_description);
+                    smf_pf_remove(pf);
+                    break;
+                }
 /*
  * Refer to lib/ipfw/ogs-ipfw.h
  * Issue #338
@@ -417,13 +423,6 @@ void smf_bearer_binding(smf_sess_t *sess)
  */
                 if (flow->direction == OGS_FLOW_UPLINK_ONLY)
                     ogs_ipfw_rule_swap(&pf->ipfw_rule);
-
-                if (rv != OGS_OK) {
-                    ogs_error("Invalid Flow-Description[%s]",
-                            pf->flow_description);
-                    smf_pf_remove(pf);
-                    break;
-                }
 
                 /*
                  * To add a flow to an existing tft.
@@ -722,42 +721,6 @@ void smf_qos_flow_binding(smf_sess_t *sess)
                 memcpy(&qos_flow->qos, &pcc_rule->qos, sizeof(ogs_qos_t));
 
                 qos_flow_created = true;
-
-            } else {
-                ogs_assert(strcmp(qos_flow->pcc_rule.id, pcc_rule->id) == 0);
-
-                /*
-                 * Check if any MBR/GBR value is non-zero. This indicates that
-                 * the flow might require GBR/MBR-specific handling.
-                 */
-                if (pcc_rule->qos.mbr.downlink || pcc_rule->qos.mbr.uplink ||
-                    pcc_rule->qos.gbr.downlink || pcc_rule->qos.gbr.uplink) {
-
-                    /*
-                     * If new packet filters are being added, or if any MBR/GBR
-                     * field differs from what is currently set, then we must
-                     * update the QoS parameters.
-                     */
-                    if ((ogs_list_count(&qos_flow->pf_to_add_list) > 0) ||
-                        (qos_flow->qos.mbr.downlink != pcc_rule->qos.mbr.downlink) ||
-                        (qos_flow->qos.mbr.uplink != pcc_rule->qos.mbr.uplink) ||
-                        (qos_flow->qos.gbr.downlink != pcc_rule->qos.gbr.downlink) ||
-                        (qos_flow->qos.gbr.uplink != pcc_rule->qos.gbr.uplink)) {
-
-                        /*
-                         * Update the QoS parameters so that the GBR QoS Flow
-                         * Information IE is properly encoded in the upcoming
-                         * signaling (NGAP/PFCP) messages.
-                         */
-                        memcpy(&qos_flow->qos, &pcc_rule->qos, sizeof(ogs_qos_t));
-
-                        /*
-                         * Setting 'qos_presence' to true triggers encoding of
-                         * the QoS IE in the subsequent Bearer Request message.
-                         */
-                        qos_presence = true;
-                    }
-                }
             }
 
         /*
@@ -808,6 +771,12 @@ void smf_qos_flow_binding(smf_sess_t *sess)
 
                 rv = ogs_ipfw_compile_rule(
                         &pf->ipfw_rule, pf->flow_description);
+                if (rv != OGS_OK) {
+                    ogs_error("Invalid Flow-Description[%s]",
+                            pf->flow_description);
+                    smf_pf_remove(pf);
+                    break;
+                }
 /*
  * Refer to lib/ipfw/ogs-ipfw.h
  * Issue #338
@@ -825,19 +794,78 @@ void smf_qos_flow_binding(smf_sess_t *sess)
                 if (flow->direction == OGS_FLOW_UPLINK_ONLY)
                     ogs_ipfw_rule_swap(&pf->ipfw_rule);
 
-                if (rv != OGS_OK) {
-                    ogs_error("Invalid Flow-Description[%s]",
-                            pf->flow_description);
-                    smf_pf_remove(pf);
-                    break;
-                }
-
                 /*
                  * To add a flow to an existing tft.
                  *
                  * 'pf_to_add_list' now has the added flow.
                  */
                 ogs_list_add(&qos_flow->pf_to_add_list, &pf->to_add_node);
+            }
+
+            /*
+             * Issue #4526
+             *
+             * 'pf_to_add_list' is rebuilt above, so an existing QoS flow
+             * has to be compared after the rebuild. Before it, the list
+             * still holds the packet filters of the previous binding.
+             */
+            if (qos_flow_created == false) {
+                ogs_assert(strcmp(qos_flow->pcc_rule.id, pcc_rule->id) == 0);
+
+                /*
+                 * ARP can change on its own (e.g. AF resPrio/preemptCap/
+                 * preemptVuln over N5), regardless of MBR/GBR.
+                 */
+                if (qos_flow->qos.arp.priority_level !=
+                        pcc_rule->qos.arp.priority_level ||
+                    qos_flow->qos.arp.pre_emption_capability !=
+                        pcc_rule->qos.arp.pre_emption_capability ||
+                    qos_flow->qos.arp.pre_emption_vulnerability !=
+                        pcc_rule->qos.arp.pre_emption_vulnerability) {
+                    ogs_info("QoS Flow[QFI:%d] ARP[%d:%d:%d] -> [%d:%d:%d]",
+                            qos_flow->qfi,
+                            qos_flow->qos.arp.priority_level,
+                            qos_flow->qos.arp.pre_emption_capability,
+                            qos_flow->qos.arp.pre_emption_vulnerability,
+                            pcc_rule->qos.arp.priority_level,
+                            pcc_rule->qos.arp.pre_emption_capability,
+                            pcc_rule->qos.arp.pre_emption_vulnerability);
+                    qos_flow->qos.arp = pcc_rule->qos.arp;
+                    qos_presence = true;
+                }
+
+                /*
+                 * Check if any MBR/GBR value is non-zero. This indicates that
+                 * the flow might require GBR/MBR-specific handling.
+                 */
+                if (pcc_rule->qos.mbr.downlink || pcc_rule->qos.mbr.uplink ||
+                    pcc_rule->qos.gbr.downlink || pcc_rule->qos.gbr.uplink) {
+
+                    /*
+                     * If new packet filters are being added, or if any MBR/GBR
+                     * field differs from what is currently set, then we must
+                     * update the QoS parameters.
+                     */
+                    if ((ogs_list_count(&qos_flow->pf_to_add_list) > 0) ||
+                        (qos_flow->qos.mbr.downlink != pcc_rule->qos.mbr.downlink) ||
+                        (qos_flow->qos.mbr.uplink != pcc_rule->qos.mbr.uplink) ||
+                        (qos_flow->qos.gbr.downlink != pcc_rule->qos.gbr.downlink) ||
+                        (qos_flow->qos.gbr.uplink != pcc_rule->qos.gbr.uplink)) {
+
+                        /*
+                         * Update the QoS parameters so that the GBR QoS Flow
+                         * Information IE is properly encoded in the upcoming
+                         * signaling (NGAP/PFCP) messages.
+                         */
+                        memcpy(&qos_flow->qos, &pcc_rule->qos, sizeof(ogs_qos_t));
+
+                        /*
+                         * Setting 'qos_presence' to true triggers encoding of
+                         * the QoS IE in the subsequent Bearer Request message.
+                         */
+                        qos_presence = true;
+                    }
+                }
             }
 
             if (qos_flow_created == false &&

@@ -257,6 +257,38 @@ int ogs_pfcp_send_heartbeat_response(ogs_pfcp_xact_t *xact)
     return rv;
 }
 
+void ogs_pfcp_send_heartbeat_response_to(
+        ogs_socket_t fd, ogs_sockaddr_t *to, uint32_t sqn)
+{
+    const int hlen = OGS_PFCP_HEADER_LEN - OGS_PFCP_SEID_LEN;
+    ogs_pfcp_header_t *h;
+    ogs_pkbuf_t *pkbuf;
+
+    ogs_warn("Heartbeat Request from unknown PFCP peer %s",
+            ogs_sockaddr_to_string_static(to));
+
+    pkbuf = ogs_pfcp_build_heartbeat_response(
+            OGS_PFCP_HEARTBEAT_RESPONSE_TYPE);
+    if (!pkbuf) {
+        ogs_error("ogs_pfcp_build_heartbeat_response() failed");
+        return;
+    }
+
+    ogs_pkbuf_push(pkbuf, hlen);
+    h = (ogs_pfcp_header_t *)pkbuf->data;
+    memset(h, 0, hlen);
+    h->version = OGS_PFCP_VERSION;
+    h->type = OGS_PFCP_HEARTBEAT_RESPONSE_TYPE;
+    h->length = htobe16(pkbuf->len - 4);
+    h->sqn_only = OGS_PFCP_XID_TO_SQN(OGS_PFCP_SQN_TO_XID(sqn));
+
+    if (ogs_sendto(fd, pkbuf->data, pkbuf->len, 0, to) < 0)
+        ogs_log_message(OGS_LOG_ERROR, ogs_socket_errno,
+                "ogs_sendto() failed to %s", ogs_sockaddr_to_string_static(to));
+
+    ogs_pkbuf_free(pkbuf);
+}
+
 int ogs_pfcp_cp_send_association_setup_request(ogs_pfcp_node_t *node,
         void (*cb)(ogs_pfcp_xact_t *xact, void *data))
 {
@@ -484,6 +516,72 @@ int ogs_pfcp_send_end_marker(ogs_pfcp_pdr_t *pdr)
     return OGS_OK;
 }
 
+/*
+ * Cause 73 requires Failed Rule ID in a Session Modification Response.
+ * The first octet selects the rule type. The ID is two octets for a PDR
+ * and four for FAR/QER/URR, in network byte order. The stack buffer stays
+ * valid until ogs_pfcp_build_msg() copies the IE into the outgoing packet.
+ */
+void ogs_pfcp_send_session_modification_rule_error(
+        ogs_pfcp_xact_t *xact, uint64_t seid,
+        uint8_t rule_type, uint32_t rule_id)
+{
+    ogs_pfcp_message_t errmsg;
+    ogs_pfcp_session_modification_response_t *rsp;
+    ogs_pkbuf_t *pkbuf = NULL;
+    uint8_t failed_rule_id[5];
+    uint16_t pdr_id;
+    uint32_t other_id;
+    int rv;
+
+    ogs_assert(xact);
+    ogs_assert(rule_type <= OGS_PFCP_RULE_TYPE_URR);
+
+    ogs_info("Sending Session Modification rule rejection: "
+            "xid[%u] CP-SEID[0x%llx] Rule-Type[%u] Rule-ID[%u] Cause[%u]",
+            xact->xid, (unsigned long long)seid, rule_type, rule_id,
+            OGS_PFCP_CAUSE_RULE_CREATION_MODIFICATION_FAILURE);
+
+    memset(&errmsg, 0, sizeof(errmsg));
+    errmsg.h.seid = seid;
+    errmsg.h.type = OGS_PFCP_SESSION_MODIFICATION_RESPONSE_TYPE;
+    rsp = &errmsg.pfcp_session_modification_response;
+    rsp->cause.presence = 1;
+    rsp->cause.u8 = OGS_PFCP_CAUSE_RULE_CREATION_MODIFICATION_FAILURE;
+
+    failed_rule_id[0] = rule_type;
+    if (rule_type == OGS_PFCP_RULE_TYPE_PDR) {
+        pdr_id = htobe16(rule_id);
+        memcpy(&failed_rule_id[1], &pdr_id, sizeof(pdr_id));
+        rsp->failed_rule_id.len = 1 + sizeof(pdr_id);
+    } else {
+        other_id = htobe32(rule_id);
+        memcpy(&failed_rule_id[1], &other_id, sizeof(other_id));
+        rsp->failed_rule_id.len = 1 + sizeof(other_id);
+    }
+    rsp->failed_rule_id.presence = 1;
+    rsp->failed_rule_id.data = failed_rule_id;
+
+    pkbuf = ogs_pfcp_build_msg(&errmsg);
+    if (!pkbuf) {
+        ogs_error("Cannot build Session Modification rule rejection: "
+                "CP-SEID[0x%llx] Rule-Type[%u] Rule-ID[%u]",
+                (unsigned long long)seid, rule_type, rule_id);
+        return;
+    }
+
+    rv = ogs_pfcp_xact_update_tx(xact, &errmsg.h, pkbuf);
+    if (rv != OGS_OK) {
+        ogs_error("Cannot prepare Session Modification rule rejection: "
+                "CP-SEID[0x%llx] Rule-Type[%u] Rule-ID[%u] rv[%d]",
+                (unsigned long long)seid, rule_type, rule_id, rv);
+        return;
+    }
+
+    rv = ogs_pfcp_xact_commit(xact);
+    ogs_expect(rv == OGS_OK);
+}
+
 void ogs_pfcp_send_error_message(
     ogs_pfcp_xact_t *xact, uint64_t seid, uint8_t type,
     uint8_t cause_value, uint16_t offending_ie_value)
@@ -492,6 +590,9 @@ void ogs_pfcp_send_error_message(
     ogs_pfcp_message_t errmsg;
     ogs_pfcp_tlv_cause_t *cause = NULL;
     ogs_pfcp_tlv_offending_ie_t *offending_ie = NULL;
+    ogs_pfcp_tlv_node_id_t *node_id = NULL;
+    ogs_pfcp_node_id_t pfcp_node_id;
+    int node_id_len = 0;
     ogs_pkbuf_t *pkbuf = NULL;
 
     ogs_assert(xact);
@@ -506,23 +607,29 @@ void ogs_pfcp_send_error_message(
         offending_ie = &errmsg.pfcp_pfd_management_response.offending_ie;
         break;
     case OGS_PFCP_ASSOCIATION_SETUP_RESPONSE_TYPE:
+        node_id = &errmsg.pfcp_association_setup_response.node_id;
         cause = &errmsg.pfcp_association_setup_response.cause;
         break;
     case OGS_PFCP_ASSOCIATION_UPDATE_RESPONSE_TYPE:
+        node_id = &errmsg.pfcp_association_update_response.node_id;
         cause = &errmsg.pfcp_association_update_response.cause;
         break;
     case OGS_PFCP_ASSOCIATION_RELEASE_RESPONSE_TYPE:
+        node_id = &errmsg.pfcp_association_release_response.node_id;
         cause = &errmsg.pfcp_association_release_response.cause;
         break;
     case OGS_PFCP_NODE_REPORT_RESPONSE_TYPE:
+        node_id = &errmsg.pfcp_node_report_response.node_id;
         cause = &errmsg.pfcp_node_report_response.cause;
         offending_ie = &errmsg.pfcp_node_report_response.offending_ie;
         break;
     case OGS_PFCP_SESSION_SET_DELETION_RESPONSE_TYPE:
+        node_id = &errmsg.pfcp_session_set_deletion_response.node_id;
         cause = &errmsg.pfcp_session_set_deletion_response.cause;
         offending_ie = &errmsg.pfcp_session_set_deletion_response.offending_ie;
         break;
     case OGS_PFCP_SESSION_ESTABLISHMENT_RESPONSE_TYPE:
+        node_id = &errmsg.pfcp_session_establishment_response.node_id;
         cause = &errmsg.pfcp_session_establishment_response.cause;
         offending_ie = &errmsg.pfcp_session_establishment_response.offending_ie;
         break;
@@ -551,6 +658,18 @@ void ogs_pfcp_send_error_message(
     if (offending_ie && offending_ie_value) {
         offending_ie->presence = 1;
         offending_ie->u16 = offending_ie_value;
+    }
+
+    /* TS 29.244 7.2.3.2: include the Node ID where the table has it M */
+    if (node_id) {
+        rv = ogs_pfcp_sockaddr_to_node_id(&pfcp_node_id, &node_id_len);
+        if (rv != OGS_OK) {
+            ogs_error("ogs_pfcp_sockaddr_to_node_id() failed");
+            return;
+        }
+        node_id->presence = 1;
+        node_id->data = &pfcp_node_id;
+        node_id->len = node_id_len;
     }
 
     pkbuf = ogs_pfcp_build_msg(&errmsg);

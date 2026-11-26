@@ -134,7 +134,8 @@ void esm_state_inactive(ogs_fsm_t *s, mme_event_t *e)
                     mme_gtp_send_delete_session_request(enb_ue, sgw_ue, sess,
                         OGS_GTP_DELETE_SEND_DEACTIVATE_BEARER_CONTEXT_REQUEST));
             } else {
-                r = nas_eps_send_deactivate_bearer_context_request(bearer);
+                r = nas_eps_send_deactivate_bearer_context_request(
+                        bearer, OGS_NAS_ESM_CAUSE_REGULAR_DEACTIVATION);
                 ogs_expect(r == OGS_OK);
                 ogs_assert(r != OGS_ERROR);
             }
@@ -148,6 +149,20 @@ void esm_state_inactive(ogs_fsm_t *s, mme_event_t *e)
             ogs_debug("ESM information response");
             ogs_debug("    IMSI[%s] PTI[%d] EBI[%d]",
                     mme_ue->imsi_bcd, sess->pti, bearer->ebi);
+
+            /*
+             * The ESM information request procedure is used during the
+             * attach procedure only (TS 24.301 6.6.1.2.1), and T3489 keeps
+             * the request until its response comes (6.6.1.2.4). A response
+             * without a pending request (from an attached UE, or during a
+             * TAU) answers no request. Ignore it instead of running the
+             * attach-only esm_handle_information_response().
+             */
+            if (!bearer->t3489.pkbuf) {
+                ogs_error("[%s] Unexpected ESM information response",
+                        mme_ue->imsi_bcd);
+                break;
+            }
 
             CLEAR_BEARER_TIMER(bearer->t3489);
 
@@ -215,6 +230,18 @@ void esm_state_inactive(ogs_fsm_t *s, mme_event_t *e)
             ogs_debug("Activate dedicated EPS bearer context accept");
             ogs_debug("    IMSI[%s] PTI[%d] EBI[%d]",
                     mme_ue->imsi_bcd, sess->pti, bearer->ebi);
+            /*
+             * TS 24.301 8.3.1: the accept answers an ACTIVATE DEDICATED
+             * EPS BEARER CONTEXT REQUEST, like the reject below.  Without
+             * the Create Bearer transaction the accept is stray; ignore it
+             * instead of asserting in mme_gtp_send_create_bearer_response().
+             */
+            if (bearer->create.xact_id < OGS_MIN_POOL_ID ||
+                    bearer->create.xact_id > OGS_MAX_POOL_ID) {
+                ogs_error("No Create Bearer transaction: EBI[%d]",
+                        bearer->ebi);
+                break;
+            }
             /* Check if Initial Context Setup Response or 
              *          E-RAB Setup Response is received */
             if (MME_HAVE_ENB_S1U_PATH(bearer)) {
@@ -232,6 +259,19 @@ void esm_state_inactive(ogs_fsm_t *s, mme_event_t *e)
             activate_dedicated_eps_bearer_context_reject =
                 &message->esm.activate_dedicated_eps_bearer_context_reject;
             ogs_assert(activate_dedicated_eps_bearer_context_reject);
+            /*
+             * TS 24.301 8.3.2: the reject answers an ACTIVATE DEDICATED
+             * EPS BEARER CONTEXT REQUEST, whose Create Bearer transaction
+             * is recorded in bearer->create.xact_id.  Without that
+             * transaction the reject is stray; ignore it instead of
+             * asserting in mme_gtp_send_create_bearer_response().
+             */
+            if (bearer->create.xact_id < OGS_MIN_POOL_ID ||
+                    bearer->create.xact_id > OGS_MAX_POOL_ID) {
+                ogs_error("No Create Bearer transaction: EBI[%d]",
+                        bearer->ebi);
+                break;
+            }
             ogs_assert(OGS_OK ==
                 mme_gtp_send_create_bearer_response(bearer,
                 gtp_cause_from_esm(
@@ -342,7 +382,8 @@ void esm_state_active(ogs_fsm_t *s, mme_event_t *e)
                     mme_gtp_send_delete_session_request(enb_ue, sgw_ue, sess,
                     OGS_GTP_DELETE_SEND_DEACTIVATE_BEARER_CONTEXT_REQUEST));
             } else {
-                r = nas_eps_send_deactivate_bearer_context_request(bearer);
+                r = nas_eps_send_deactivate_bearer_context_request(
+                        bearer, OGS_NAS_ESM_CAUSE_REGULAR_DEACTIVATION);
                 ogs_expect(r == OGS_OK);
                 ogs_assert(r != OGS_ERROR);
             }
@@ -366,6 +407,19 @@ void esm_state_active(ogs_fsm_t *s, mme_event_t *e)
                     "context accept");
             ogs_debug("    IMSI[%s] PTI[%d] EBI[%d]",
                     mme_ue->imsi_bcd, sess->pti, bearer->ebi);
+            /*
+             * TS 24.301 8.3.11: the accept completes a network-initiated
+             * deactivation (6.4.4), whose Delete Bearer transaction is
+             * recorded in bearer->delete.xact_id.  Without that transaction
+             * the message is stray; ignore it instead of asserting in
+             * mme_gtp_send_delete_bearer_response().
+             */
+            if (bearer->delete.xact_id < OGS_MIN_POOL_ID ||
+                    bearer->delete.xact_id > OGS_MAX_POOL_ID) {
+                ogs_error("No Delete Bearer transaction: EBI[%d]",
+                        bearer->ebi);
+                break;
+            }
             ogs_assert(OGS_OK ==
                 mme_gtp_send_delete_bearer_response(
                     bearer, OGS_GTP2_CAUSE_REQUEST_ACCEPTED));

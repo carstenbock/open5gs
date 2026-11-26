@@ -46,6 +46,11 @@ void ogs_mem_final(void)
         talloc_report_full(__ogs_talloc_core, stderr);
 
     talloc_free(__ogs_talloc_core);
+    __ogs_talloc_core = NULL;
+
+    if (talloc_total_size(NULL) > 0)
+        talloc_report_full(NULL, stderr);
+    talloc_disable_null_tracking();
 
     ogs_thread_mutex_destroy(&mutex);
 }

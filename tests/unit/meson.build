@@ -23,28 +23,75 @@ testunit_unit_sources = files('''
     gtp-message-test.c
     ngap-message-test.c
     sbi-message-test.c
+    sbi-server-test.c
     security-test.c
     nrf-discovery-test.c
+    nrf-timer-test.c
+    nnrf-subscription-test.c
     crash-test.c
+    mme-dns-select-test.c
+    mme-s13-test.c
+    mme-apn-test.c
+    mme-attach-test.c
+    mme-enb-id-test.c
+    amf-eir-test.c
+    amf-registration-test.c
+    amf-namf-test.c
+    amf-gnb-id-test.c
+    amf-supi-test.c
+    eir-config-test.c
+    ipfw-test.c
+    pfcp-rule-test.c
 '''.split())
 
 testunit_unit_exe = executable('unit',
     sources : testunit_unit_sources,
     c_args : [testunit_core_cc_flags, sbi_cc_flags],
+    include_directories : srcinc,
     dependencies : [libs1ap_dep,
                     libgtp_dep,
                     libngap_dep,
                     libnas_eps_dep,
-                    libsbi_dep])
+                    libnas_5gs_dep,
+                    libsbi_dep,
+                    libipfw_dep,
+                    libpfcp_dep,
+                    libnrf_dep,
+                    libmme_dep,
+                    libamf_dep])
 
 test('unit', testunit_unit_exe, is_parallel : false, suite: 'unit')
 
-# Dedicated test for the MME TS 29.303 S-NAPTR PGW discovery helpers. It links
-# libmme (for mme_dns_*), kept separate so the main 'unit' suite stays lean.
-testunit_mme_dns_exe = executable('mme-dns-test',
-    sources : files('mme-dns-test.c'),
-    c_args : [testunit_core_cc_flags, sbi_cc_flags],
-    include_directories : srcinc,
-    dependencies : [libmme_dep])
+# Exercise policy decisions and the real AMF/MME FSMs without peer processes.
+test('eir-fsm', testunit_unit_exe,
+    args : ['mme-s13-test', 'mme-attach-test',
+            'amf-eir-test', 'amf-registration-test', 'eir-config-test'],
+    is_parallel : false,
+    suite : 'eir')
 
-test('mme-dns', testunit_mme_dns_exe, is_parallel : false, suite: 'unit')
+# AUSF context tests link libausf alone.
+testunit_ausf_exe = executable('ausf-unit',
+    sources : files('ausf-abts-main.c', 'ausf-context-test.c'),
+    c_args : testunit_core_cc_flags,
+    include_directories : [srcinc, include_directories('../../src/ausf')],
+    dependencies : [libausf_dep])
+
+test('ausf-unit', testunit_ausf_exe, is_parallel : false, suite: 'unit')
+
+# UDM N13 request-boundary tests link libudm alone.
+testunit_udm_exe = executable('udm-unit',
+    sources : files('udm-abts-main.c', 'udm-auth-test.c'),
+    c_args : testunit_core_cc_flags,
+    include_directories : [srcinc, include_directories('../../src/udm')],
+    dependencies : [libudm_dep])
+
+test('udm-unit', testunit_udm_exe, is_parallel : false, suite: 'unit')
+
+# UPF tests link libupf, whose metrics symbols clash with libamf.
+testunit_upf_exe = executable('upf-unit',
+    sources : files('upf-abts-main.c', 'upf-context-test.c'),
+    c_args : testunit_core_cc_flags,
+    include_directories : [srcinc, include_directories('../../src/upf')],
+    dependencies : [libpfcp_dep, libupf_dep])
+
+test('upf-unit', testunit_upf_exe, is_parallel : false, suite: 'unit')

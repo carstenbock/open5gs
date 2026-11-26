@@ -234,10 +234,10 @@ typedef struct ogs_gtp1_gsn_addr_s {
 #define OGS_GTP1_QOS_PROFILE_MAX_LEN 255
 /* TS 24.008 10.5.6.5 Quality of service */
 typedef struct ogs_gtp1_qos_profile_data_extended_bit_rate_s {
-    uint8_t max_bit_rate_uplink;
-    uint8_t guaranteed_bit_rate_uplink;
     uint8_t max_bit_rate_downlink;
     uint8_t guaranteed_bit_rate_downlink;
+    uint8_t max_bit_rate_uplink;
+    uint8_t guaranteed_bit_rate_uplink;
 } __attribute__ ((packed)) ogs_gtp1_qos_profile_data_extended_bit_rate_t;
 typedef struct ogs_gtp1_qos_profile_data_s {
 ED3(uint8_t spare1:2;,
@@ -372,7 +372,9 @@ typedef struct ogs_gtp1_mm_context_decoded_s {
     ogs_gtp1_auth_quintuplet_t auth_quintuplets[5];
     ogs_gtp1_drx_param_val_t drx_param;
     uint8_t ms_network_capability_len;
-    uint8_t ms_network_capability[6]; /* ogs_nas_ms_network_capability_t */
+    /* TS 24.008 10.5.5.12: the value part is at most 8 octets, which is also
+     * the size of the value part of ogs_nas_ms_network_capability_t. */
+    uint8_t ms_network_capability[8]; /* ogs_nas_ms_network_capability_t */
     uint8_t imeisv_len;
     uint8_t imeisv[10]; /* ogs_nas_mobile_identity_imeisv_t */
     uint8_t nrsrna;

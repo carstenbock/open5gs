@@ -74,7 +74,26 @@ int resvd_set_number = RESVD_SET;
 int ipfw_socket = -1;
 
 #if 1 /* modifed by acetcom */
-#define errx(eval, ...) ogs_log_message(OGS_LOG_ERROR, 0, __VA_ARGS__)
+/*
+ * errx() is overridden so that a malformed rule cannot exit() the daemon.
+ *
+ * Logging alone, however, lets the parser fall through and build a rule out
+ * of data that was never populated -- an unresolvable address leaves the
+ * address word zeroed and a "0.0.0.0/32" filter is installed, a bad prefix
+ * length leaves the mask zeroed and the filter widens to "any" -- while
+ * ogs_ipfw_compile_rule() still reports success to its caller.
+ *
+ * Record the failure so that ogs_ipfw_compile_rule() can reject the rule.
+ * The flag is cleared immediately before compile_rule() and read immediately
+ * after it returns; rules are compiled on the NF event loop.
+ */
+int ogs_ipfw_parse_error = 0;
+
+#define errx(eval, ...) \
+    do { \
+        ogs_ipfw_parse_error = 1; \
+        ogs_log_message(OGS_LOG_ERROR, 0, __VA_ARGS__); \
+    } while (0)
 #endif
 
 #define	CHECK_LENGTH(v, len) do {				\
@@ -2868,7 +2887,7 @@ fill_ip(ipfw_insn_ip *cmd, char *av, int cblen, struct tidx *tstate)
 		else if (masklen > 32)
 			errx(EX_DATAERR, "bad width ``%s''", p);
 		else
-			d[1] = htonl(~0 << (32 - masklen));
+			d[1] = htonl((uint32_t)(~0) << (32 - masklen));
 		break;
 	case '{':	/* no mask, assume /24 and put back the '{' */
 		/* Clang scan-build SA: Result of operation is garbage: The SA is whining that the result of the << is
@@ -3155,24 +3174,36 @@ get_mac_addr_mask(const char *p, uint8_t *addr, uint8_t *mask)
 	optr = ptr = strdup(p);
 	if ((ap = strsep(&ptr, "&/")) != NULL && *ap != 0) {
 		l = strlen(ap);
-		if (strspn(ap, macset) != l || (mac = ether_aton(ap)) == NULL)
+		if (strspn(ap, macset) != l || (mac = ether_aton(ap)) == NULL) {
 			errx(EX_DATAERR, "Incorrect MAC address");
+			free(optr);
+			return;
+		}
 		bcopy(mac, addr, ETHER_ADDR_LEN);
-	} else
+	} else {
 		errx(EX_DATAERR, "Incorrect MAC address");
+		free(optr);
+		return;
+	}
 
 	if (ptr != NULL) { /* we have mask? */
 		if (p[ptr - optr - 1] == '/') { /* mask len */
 			long ml = strtol(ptr, &ap, 10);
-			if (*ap != 0 || ml > ETHER_ADDR_LEN * 8 || ml < 0)
+			if (*ap != 0 || ml > ETHER_ADDR_LEN * 8 || ml < 0) {
 				errx(EX_DATAERR, "Incorrect mask length");
+				free(optr);
+				return;
+			}
 			for (i = 0; ml > 0 && i < ETHER_ADDR_LEN; ml -= 8, i++)
 				mask[i] = (ml >= 8) ? 0xff: (~0) << (8 - ml);
 		} else { /* mask */
 			l = strlen(ptr);
 			if (strspn(ptr, macset) != l ||
-			    (mac = ether_aton(ptr)) == NULL)
+			    (mac = ether_aton(ptr)) == NULL) {
 				errx(EX_DATAERR, "Incorrect mask");
+				free(optr);
+				return;
+			}
 			bcopy(mac, mask, ETHER_ADDR_LEN);
 		}
 	} else { /* default mask: ff:ff:ff:ff:ff:ff */
@@ -3281,7 +3312,9 @@ add_mactype(ipfw_insn *cmd, char *av, int cblen)
 		return NULL;
 }
 
-static int
+/* Not static: ogs_ipfw_compile_rule() resolves the protocol name here so
+ * that the same table is used on both sides. */
+int
 ipfw_proto_by_name(const char *name)
 {
 	struct protoent *pe;
@@ -3335,6 +3368,7 @@ add_proto0(ipfw_insn *cmd, char *av, u_char *protop)
 	if (*ep != '\0' || proto <= 0) {
 		proto = ipfw_proto_by_name(av);
 		if (proto < 0) {
+			ogs_ipfw_parse_error = 1;
 			ogs_error("Unknown protocol '%s' in flow description "
 					"(getprotobyname() failed; "
 					"check /etc/protocols)", av);

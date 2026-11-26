@@ -19,7 +19,6 @@ libsbi_openapi_sources = files('''
     src/list.c
     src/apiKey.c
     src/binary.c
-    external/cJSON.c
 
     model/_application_data_influence_data_subs_to_notify_post_request_inner.c
     model/_sm_policies_post_200_response.c
@@ -413,6 +412,7 @@ libsbi_openapi_sources = files('''
     model/ee_subscription.c
     model/ee_subscription_1.c
     model/ee_subscription_ext.c
+    model/eir_response_data.c
     model/ellipsoid_arc.c
     model/emergency_info.c
     model/emergency_info_1.c
@@ -428,6 +428,7 @@ libsbi_openapi_sources = files('''
     model/eps_nas_integrity_algorithm.c
     model/eps_nas_security_mode.c
     model/eps_pdn_cnx_info.c
+    model/equipment_status.c
     model/error_report.c
     model/establishment_rejection_cause.c
     model/eth_flow_description.c
@@ -1864,11 +1865,11 @@ endif
 libsbi_openapi = library('ogssbi-openapi',
     version : libogslib_version,
     include_directories : [libsbi_openapi_inc, libinc],
-    dependencies : libcore_dep,
+    dependencies : libogscjson_dep,
     link_whole : libsbi_openapi_static_libs,
     install : true)
 
 libsbi_openapi_dep = declare_dependency(
     link_with : libsbi_openapi,
     include_directories : [libsbi_openapi_inc, libinc],
-    dependencies : libcore_dep)
+    dependencies : libogscjson_dep)

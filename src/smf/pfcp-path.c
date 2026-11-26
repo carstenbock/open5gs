@@ -165,6 +165,14 @@ static void pfcp_recv_cb(short when, ogs_socket_t fd, void *data)
     node = ogs_pfcp_node_find(&ogs_pfcp_self()->pfcp_peer_list,
             pfcp_status == OGS_PFCP_STATUS_SUCCESS ? &node_id : NULL, &from);
     if (!node) {
+        /* TS 29.244 6.2.2.2 */
+        if (message->h.type == OGS_PFCP_HEARTBEAT_REQUEST_TYPE &&
+            !message->h.seid_presence &&
+            message->pfcp_heartbeat_request.recovery_time_stamp.presence) {
+            ogs_pfcp_send_heartbeat_response_to(fd, &from, message->h.sqn);
+            goto cleanup;
+        }
+
         if (message->h.type == OGS_PFCP_ASSOCIATION_SETUP_REQUEST_TYPE ||
             message->h.type == OGS_PFCP_ASSOCIATION_SETUP_RESPONSE_TYPE) {
             ogs_assert(pfcp_status == OGS_PFCP_STATUS_SUCCESS);
@@ -205,7 +213,8 @@ static void pfcp_recv_cb(short when, ogs_socket_t fd, void *data)
 
     rv = ogs_queue_push(ogs_app()->queue, e);
     if (rv != OGS_OK) {
-        ogs_error("ogs_queue_push() failed:%d", (int)rv);
+        if (rv != OGS_DONE)
+            ogs_error("ogs_queue_push() failed:%d", (int)rv);
         goto cleanup;
     }
 
@@ -291,6 +300,10 @@ static void sess_5gc_timeout(ogs_pfcp_xact_t *xact, void *data)
     smf_ue = smf_ue_find_by_id(sess->smf_ue_id);
     ogs_assert(smf_ue);
 
+    /* The delayed indirect tunnel REMOVE, if this is it, is gone */
+    if (sess->handover.indirect_remove_xact_id == xact->id)
+        sess->handover.indirect_remove_xact_id = OGS_INVALID_POOL_ID;
+
     switch (type) {
     case OGS_PFCP_SESSION_ESTABLISHMENT_REQUEST_TYPE:
         ogs_warn("No PFCP session establishment response");
@@ -303,7 +316,8 @@ static void sess_5gc_timeout(ogs_pfcp_xact_t *xact, void *data)
 
         rv = ogs_queue_push(ogs_app()->queue, e);
         if (rv != OGS_OK) {
-            ogs_error("ogs_queue_push() failed:%d", (int)rv);
+            if (rv != OGS_DONE)
+                ogs_error("ogs_queue_push() failed:%d", (int)rv);
             ogs_event_free(e);
         }
         break;
@@ -330,7 +344,8 @@ static void sess_5gc_timeout(ogs_pfcp_xact_t *xact, void *data)
         ogs_error("%s", strerror);
 
         if (trigger == OGS_PFCP_DELETE_TRIGGER_LOCAL_INITIATED ||
-            trigger == OGS_PFCP_DELETE_TRIGGER_PCF_INITIATED) {
+            trigger == OGS_PFCP_DELETE_TRIGGER_PCF_INITIATED ||
+            trigger == OGS_PFCP_DELETE_TRIGGER_SESSION_REPLACEMENT) {
 
             /* Nothing */
 
@@ -338,11 +353,21 @@ static void sess_5gc_timeout(ogs_pfcp_xact_t *xact, void *data)
                 trigger == OGS_PFCP_DELETE_TRIGGER_AMF_UPDATE_SM_CONTEXT ||
                 trigger == OGS_PFCP_DELETE_TRIGGER_AMF_RELEASE_SM_CONTEXT) {
 
-            ogs_assert(stream);
-            ogs_assert(true ==
-                ogs_sbi_server_send_error(stream,
-                    OGS_SBI_HTTP_STATUS_GATEWAY_TIMEOUT, NULL, strerror,
-                    NULL, NULL));
+            /* The associated SBI stream may already have been released while
+             * the PFCP transaction was still pending (e.g. the AMF gave up,
+             * or the UE context was cleaned up during churn). Do not abort
+             * the whole SMF in that case: report the timeout only when the
+             * stream is still alive, and let the SMF_EVT_N4_TIMER below
+             * remove the session through the pfcp-sm state machine. */
+            if (stream) {
+                ogs_assert(true ==
+                    ogs_sbi_server_send_error(stream,
+                        OGS_SBI_HTTP_STATUS_GATEWAY_TIMEOUT, NULL, strerror,
+                        NULL, NULL));
+            } else {
+                ogs_warn("No SBI stream for PFCP deletion timeout [%d]",
+                        trigger);
+            }
         } else {
             ogs_fatal("Unknown trigger [%d]", trigger);
             ogs_assert_if_reached();
@@ -359,10 +384,12 @@ static void sess_5gc_timeout(ogs_pfcp_xact_t *xact, void *data)
         e->sess_id = sess->id;
         e->h.timer_id = SMF_TIMER_PFCP_NO_DELETION_RESPONSE;
         e->pfcp_node = sess->pfcp_node;
+        e->release.trigger = trigger;
 
         rv = ogs_queue_push(ogs_app()->queue, e);
         if (rv != OGS_OK) {
-            ogs_error("ogs_queue_push() failed:%d", (int)rv);
+            if (rv != OGS_DONE)
+                ogs_error("ogs_queue_push() failed:%d", (int)rv);
             ogs_event_free(e);
         }
         break;
@@ -427,8 +454,11 @@ static void qos_flow_5gc_timeout(ogs_pfcp_xact_t *xact, void *data)
 static void sess_epc_timeout(ogs_pfcp_xact_t *xact, void *data)
 {
     smf_sess_t *sess = NULL;
+    smf_bearer_t *bearer = NULL;
     ogs_pool_id_t sess_id = OGS_INVALID_POOL_ID;
+    smf_event_t *e = NULL;
     uint8_t type;
+    int rv;
 
     ogs_assert(xact);
     type = xact->seq[0].type;
@@ -446,8 +476,26 @@ static void sess_epc_timeout(ogs_pfcp_xact_t *xact, void *data)
     switch (type) {
     case OGS_PFCP_SESSION_ESTABLISHMENT_REQUEST_TYPE:
         ogs_warn("No PFCP session establishment response");
+        e = smf_event_new(SMF_EVT_N4_TIMER);
+        ogs_assert(e);
+        e->sess_id = sess->id;
+        e->h.timer_id = SMF_TIMER_PFCP_NO_ESTABLISHMENT_RESPONSE;
+        e->pfcp_node = sess->pfcp_node;
+        e->gtp_xact_id = xact->assoc_xact_id;
+
+        rv = ogs_queue_push(ogs_app()->queue, e);
+        if (rv != OGS_OK) {
+            if (rv != OGS_DONE)
+                ogs_error("ogs_queue_push() failed:%d", (int)rv);
+            ogs_event_free(e);
+        }
         break;
     case OGS_PFCP_SESSION_MODIFICATION_REQUEST_TYPE:
+        if (xact->modify_flags & OGS_PFCP_MODIFY_ERROR_INDICATION) {
+            bearer = smf_default_bearer_in_sess(sess);
+            if (bearer)
+                bearer->ei_deactivation = false;
+        }
         ogs_error("No PFCP session modification response");
         break;
     case OGS_PFCP_SESSION_DELETION_REQUEST_TYPE:
@@ -480,6 +528,9 @@ static void bearer_epc_timeout(ogs_pfcp_xact_t *xact, void *data)
 
     switch (type) {
     case OGS_PFCP_SESSION_MODIFICATION_REQUEST_TYPE:
+        if (xact->modify_flags &
+                (OGS_PFCP_MODIFY_ERROR_INDICATION|OGS_PFCP_MODIFY_REMOVE))
+            bearer->ei_deactivation = false;
         ogs_error("No PFCP session modification response");
         /* a deactivation that stopped here may be started again */
         bearer->deactivating = false;
@@ -591,7 +642,7 @@ int smf_5gc_pfcp_send_session_establishment_request(
  *   over N4 towards another SMF or another PFCP entity in the SMF
  *   as specified in clause 5.22.2 and clause 5.22.3.
  */
-    h.seid = sess->upf_n4_seid;
+    h.seid = 0;
 
     n4buf = smf_n4_build_session_establishment_request(h.type, sess, xact);
     if (!n4buf) {
@@ -639,6 +690,15 @@ int smf_5gc_pfcp_send_all_pdr_modification_request(
     xact->local_seid = sess->smf_n4_seid;
     xact->modify_flags = flags | OGS_PFCP_MODIFY_SESSION;
     xact->delete_trigger = trigger;
+
+    /*
+     * The delayed REMOVE of the indirect tunnel after handover completion.
+     * ngap_handle_handover_request_ack() reuses it if the next handover
+     * starts before it is answered.
+     */
+    if (duration &&
+        (flags & OGS_PFCP_MODIFY_INDIRECT) && (flags & OGS_PFCP_MODIFY_REMOVE))
+        sess->handover.indirect_remove_xact_id = xact->id;
 
     ogs_list_init(&sess->pdr_to_modify_list);
     ogs_list_for_each(&sess->pfcp.pdr_list, pdr)
@@ -756,12 +816,14 @@ int smf_5gc_pfcp_send_session_deletion_request(
     n4buf = smf_n4_build_session_deletion_request(h.type, sess);
     if (!n4buf) {
         ogs_error("smf_n4_build_session_deletion_request() failed");
+        ogs_pfcp_xact_delete(xact);
         return OGS_ERROR;
     }
 
     rv = ogs_pfcp_xact_update_tx(xact, &h, n4buf);
     if (rv != OGS_OK) {
         ogs_error("ogs_pfcp_xact_update_tx() failed");
+        ogs_pfcp_xact_delete(xact);
         return OGS_ERROR;
     }
 
@@ -825,7 +887,7 @@ int smf_epc_pfcp_send_session_establishment_request(
  *   over N4 towards another SMF or another PFCP entity in the SMF
  *   as specified in clause 5.22.2 and clause 5.22.3.
  */
-    h.seid = sess->upf_n4_seid;
+    h.seid = 0;
 
     n4buf = smf_n4_build_session_establishment_request(h.type, sess, xact);
     if (!n4buf) {
@@ -1049,6 +1111,38 @@ int smf_epc_pfcp_send_deactivation(smf_sess_t *sess, uint8_t gtp_cause)
                         "failed");
                 return OGS_ERROR;
             }
+        }
+        break;
+
+    case OGS_GTP2_CAUSE_REACTIVATION_REQUESTED:
+        /*
+         * GTP-U Error Indication on the default bearer (TS 23.007):
+         * deactivate all bearers of this PDN connection. The PFCP
+         * modification response then sends a Delete Bearer Request for the
+         * default bearer (Linked EBI) to the SGW-C/MME.
+         *
+         * The "Reactivation requested" cause is used so the MME maps it to
+         * NAS ESM cause #39 "reactivation requested" (3GPP TS 29.274
+         * clause 7.2.9.2 and Table C.3), instructing the UE to re-establish
+         * the PDN connection (e.g. the IMS PDN for VoLTE) instead of just
+         * deactivating it.
+         */
+        if (ogs_list_first(&sess->bearer_list) == NULL) {
+            ogs_error("No Bearer List in Session");
+            return OGS_ERROR;
+        }
+
+        /* Deactivate this PDN connection */
+        rv = smf_epc_pfcp_send_all_pdr_modification_request(
+                sess, OGS_INVALID_POOL_ID, NULL,
+                OGS_PFCP_MODIFY_DL_ONLY|OGS_PFCP_MODIFY_DEACTIVATE|
+                OGS_PFCP_MODIFY_ERROR_INDICATION,
+                OGS_NAS_PROCEDURE_TRANSACTION_IDENTITY_UNASSIGNED,
+                OGS_GTP2_CAUSE_REACTIVATION_REQUESTED);
+        if (rv != OGS_OK) {
+            ogs_error("smf_epc_pfcp_send_all_pdr_modification_request() "
+                    "failed");
+            return OGS_ERROR;
         }
         break;
 

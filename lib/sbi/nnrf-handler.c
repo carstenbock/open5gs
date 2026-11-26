@@ -860,9 +860,14 @@ static bool handle_amf_info(
                     GuamiAmfInfoItem->plmn_id->mnc &&
                     GuamiAmfInfoItem->plmn_id->mcc) {
 
-                ogs_sbi_parse_guami(
+                if (!ogs_sbi_parse_guami(
                         &nf_info->amf.guami[nf_info->amf.num_of_guami],
-                        GuamiAmfInfoItem);
+                        GuamiAmfInfoItem)) {
+                    ogs_error("[%s] Invalid GUAMI in AMF NF profile",
+                            nf_instance->id);
+                    rv = false;
+                    break;
+                }
                 nf_info->amf.num_of_guami++;
             }
         }
@@ -1000,7 +1005,8 @@ static void handle_validity_time(
     if (!subscription_data->t_validity) {
         subscription_data->t_validity =
             ogs_timer_add(ogs_app()->timer_mgr,
-                ogs_timer_subscription_validity, subscription_data);
+                ogs_timer_subscription_validity,
+                OGS_UINT_TO_POINTER(subscription_data->pool_id));
         ogs_assert(subscription_data->t_validity);
     }
     ogs_timer_start(subscription_data->t_validity,
@@ -1015,7 +1021,8 @@ static void handle_validity_time(
     if (!subscription_data->t_patch) {
         subscription_data->t_patch =
             ogs_timer_add(ogs_app()->timer_mgr,
-                ogs_timer_subscription_patch, subscription_data);
+                ogs_timer_subscription_patch,
+                OGS_UINT_TO_POINTER(subscription_data->pool_id));
         ogs_assert(subscription_data->t_patch);
     }
     ogs_timer_start(subscription_data->t_patch, patch);
@@ -1176,6 +1183,136 @@ void ogs_nnrf_nfm_handle_nf_status_update(
     handle_validity_time(subscription_data, validity_time, action);
 }
 
+void ogs_nnrf_nfm_handle_nf_status_subscription_response(
+        ogs_sbi_message_t *recvmsg, void *data)
+{
+    ogs_sbi_subscription_data_t *subscription_data = NULL;
+
+    ogs_assert(recvmsg);
+
+    subscription_data = ogs_sbi_subscription_data_find_by_pool_id(
+            OGS_POINTER_TO_UINT(data));
+    if (!subscription_data) {
+        ogs_error("Subscription has already been removed [%d]",
+                (int)OGS_POINTER_TO_UINT(data));
+        return;
+    }
+
+    SWITCH(recvmsg->h.method)
+    CASE(OGS_SBI_HTTP_METHOD_POST)
+        if (recvmsg->res_status == OGS_SBI_HTTP_STATUS_CREATED ||
+            recvmsg->res_status == OGS_SBI_HTTP_STATUS_OK) {
+            ogs_nnrf_nfm_handle_nf_status_subscribe(
+                    subscription_data, recvmsg);
+        } else {
+            ogs_error("HTTP response error : %d", recvmsg->res_status);
+        }
+        break;
+
+    CASE(OGS_SBI_HTTP_METHOD_PATCH)
+        if (recvmsg->res_status == OGS_SBI_HTTP_STATUS_OK ||
+            recvmsg->res_status == OGS_SBI_HTTP_STATUS_NO_CONTENT) {
+            ogs_nnrf_nfm_handle_nf_status_update(subscription_data, recvmsg);
+        } else {
+            ogs_error("[%s] HTTP response error [%d]",
+                    subscription_data->id ? subscription_data->id : "Unknown",
+                    recvmsg->res_status);
+        }
+        break;
+
+    CASE(OGS_SBI_HTTP_METHOD_DELETE)
+        if (recvmsg->res_status == OGS_SBI_HTTP_STATUS_NO_CONTENT)
+            ogs_info("[%s] Subscription deleted",
+                    subscription_data->id ? subscription_data->id : "Unknown");
+        else
+            ogs_error("[%s] HTTP response error [%d]",
+                    subscription_data->id ? subscription_data->id : "Unknown",
+                    recvmsg->res_status);
+
+        ogs_sbi_subscription_data_remove(subscription_data);
+        break;
+
+    DEFAULT
+        ogs_error("[%s] Invalid HTTP method [%s]",
+                subscription_data->id ? subscription_data->id : "Unknown",
+                recvmsg->h.method);
+        ogs_assert_if_reached();
+    END
+}
+
+/*
+ * Defense-in-depth (TS 33.501 clause 5.9.2.1): accept an NRF status
+ * notification only when it corresponds to a confirmed subscription this NF
+ * created with the NRF. We test live subscription state (subscription_data_list
+ * via ogs_sbi_nf_status_subscription_exists(..., confirmed_only=true)), so a
+ * notification outside our active subscription scope is discarded before any
+ * local NF cache mutation.
+ *
+ * NOTE: This is surface reduction, NOT source authentication. Transport-layer
+ * trust (TLS/mTLS via server.verify_client) remains the primary control: a
+ * forged profile that falls within our active subscription scope is still
+ * accepted.
+ */
+static bool nf_profile_has_status_subscription(OpenAPI_nf_profile_t *NFProfile)
+{
+    OpenAPI_lnode_t *node = NULL;
+
+    ogs_assert(NFProfile);
+    ogs_assert(ogs_sbi_self()->nf_instance);
+    ogs_assert(ogs_sbi_self()->nf_instance->id);
+
+    if (ogs_sbi_nf_status_subscription_exists(
+                ogs_sbi_self()->nf_instance->id,
+                NFProfile->nf_type, OpenAPI_service_name_NULL, true))
+        return true;
+
+    OpenAPI_list_for_each(NFProfile->nf_services, node) {
+        OpenAPI_nf_service_t *NFService = node->data;
+        if (NFService && ogs_sbi_nf_status_subscription_exists(
+                    ogs_sbi_self()->nf_instance->id,
+                    OpenAPI_nf_type_NULL, NFService->service_name, true))
+            return true;
+    }
+
+    OpenAPI_list_for_each(NFProfile->nf_service_list, node) {
+        OpenAPI_map_t *NFServiceMap = node->data;
+        OpenAPI_nf_service_t *NFService =
+            NFServiceMap ? NFServiceMap->value : NULL;
+        if (NFService && ogs_sbi_nf_status_subscription_exists(
+                    ogs_sbi_self()->nf_instance->id,
+                    OpenAPI_nf_type_NULL, NFService->service_name, true))
+            return true;
+    }
+
+    return false;
+}
+
+/* NF_DEREGISTERED carries no profile, so match the cached NF's type/services
+ * against a confirmed subscription before evicting it (forged-deregister DoS). */
+static bool nf_instance_has_status_subscription(
+        ogs_sbi_nf_instance_t *nf_instance)
+{
+    ogs_sbi_nf_service_t *nf_service = NULL;
+
+    ogs_assert(nf_instance);
+    ogs_assert(ogs_sbi_self()->nf_instance);
+    ogs_assert(ogs_sbi_self()->nf_instance->id);
+
+    if (ogs_sbi_nf_status_subscription_exists(
+                ogs_sbi_self()->nf_instance->id,
+                nf_instance->nf_type, OpenAPI_service_name_NULL, true))
+        return true;
+
+    ogs_list_for_each(&nf_instance->nf_service_list, nf_service) {
+        if (ogs_sbi_nf_status_subscription_exists(
+                    ogs_sbi_self()->nf_instance->id,
+                    OpenAPI_nf_type_NULL, nf_service->name, true))
+            return true;
+    }
+
+    return false;
+}
+
 bool ogs_nnrf_nfm_handle_nf_status_notify(
         ogs_sbi_stream_t *stream, ogs_sbi_message_t *recvmsg)
 {
@@ -1287,6 +1424,20 @@ bool ogs_nnrf_nfm_handle_nf_status_notify(
             return false;
         }
 
+        if (nf_profile_has_status_subscription(NFProfile) == false) {
+            ogs_warn("[%s] (NRF-notify) No active subscription for notified "
+                    "profile [type:%s] - discarded",
+                    NFProfile->nf_instance_id,
+                    OpenAPI_nf_type_ToString(NFProfile->nf_type));
+            ogs_assert(true ==
+                ogs_sbi_server_send_error(
+                    stream, OGS_SBI_HTTP_STATUS_NOT_FOUND,
+                    recvmsg, "No active subscription for notification",
+                    NFProfile->nf_instance_id, NULL));
+            ogs_sbi_header_free(&header);
+            return false;
+        }
+
         nf_instance = ogs_sbi_nf_instance_find(message.h.resource.component[1]);
         if (!nf_instance) {
             nf_instance = ogs_sbi_nf_instance_add();
@@ -1295,9 +1446,10 @@ bool ogs_nnrf_nfm_handle_nf_status_notify(
                         "due to insufficient space",
                         message.h.resource.component[1]);
                 ogs_assert(true == ogs_sbi_server_send_error(
-                        stream, OGS_SBI_HTTP_STATUS_PAYLOAD_TOO_LARGE,
-                        recvmsg, "Insufficient space",
-                        message.h.resource.component[1], NULL));
+                        stream, OGS_SBI_HTTP_STATUS_INTERNAL_SERVER_ERROR,
+                        recvmsg, "Insufficient resources",
+                        message.h.resource.component[1],
+                        "INSUFFICIENT_RESOURCES"));
                 ogs_sbi_header_free(&header);
                 return false;
             }
@@ -1363,6 +1515,20 @@ bool ogs_nnrf_nfm_handle_nf_status_notify(
             OpenAPI_notification_event_type_NF_DEREGISTERED) {
         nf_instance = ogs_sbi_nf_instance_find(message.h.resource.component[1]);
         if (nf_instance) {
+            if (nf_instance_has_status_subscription(nf_instance) == false) {
+                ogs_warn("[%s] (NRF-notify) NF_DEREGISTERED outside "
+                        "subscription scope [type:%s] - ignored",
+                        nf_instance->id,
+                        OpenAPI_nf_type_ToString(nf_instance->nf_type));
+                ogs_assert(true ==
+                    ogs_sbi_server_send_error(
+                        stream, OGS_SBI_HTTP_STATUS_NOT_FOUND,
+                        recvmsg, "No active subscription for notification",
+                        message.h.resource.component[1], NULL));
+                ogs_sbi_header_free(&header);
+                return false;
+            }
+
             ogs_info("[%s] (NRF-notify) NF_DEREGISTERED event [type:%s]",
                     nf_instance->id,
                     OpenAPI_nf_type_ToString(nf_instance->nf_type));

@@ -44,6 +44,7 @@ typedef enum {
     MME_EVENT_S11_TIMER,
     MME_EVENT_S6A_MESSAGE,
     MME_EVENT_S6A_TIMER,
+    MME_EVENT_S13_MESSAGE,
 
     MME_EVENT_SGSAP_MESSAGE,
     MME_EVENT_SGSAP_TIMER,
@@ -53,6 +54,8 @@ typedef enum {
     MME_EVENT_GN_MESSAGE,
     MME_EVENT_GN_TIMER,
 
+    MME_EVENT_DNS_RESOLVED,
+
     MAX_NUM_OF_MME_EVENT,
 
 } mme_event_e;
@@ -61,6 +64,7 @@ typedef long S1AP_ProcedureCode_t;
 typedef struct S1AP_S1AP_PDU ogs_s1ap_message_t;
 typedef struct ogs_nas_eps_message_s ogs_nas_eps_message_t;
 typedef struct ogs_diam_s6a_message_s ogs_diam_s6a_message_t;
+typedef struct ogs_diam_s13_message_s ogs_diam_s13_message_t;
 typedef struct mme_vlr_s mme_vlr_t;
 typedef struct mme_enb_s mme_enb_t;
 typedef struct enb_ue_s enb_ue_t;
@@ -88,16 +92,20 @@ typedef struct mme_event_s {
     ogs_gtp_node_t *gnode;
 
     uint8_t nas_type;
+    int mac_failed;
     int create_action;
     ogs_nas_eps_message_t *nas_message;
 
     ogs_diam_s6a_message_t *s6a_message;
+    ogs_diam_s13_message_t *s13_message;
+    uint32_t eir_check_id;
 
     mme_vlr_t *vlr;
     ogs_pool_id_t enb_id;
     ogs_pool_id_t enb_ue_id;
     ogs_pool_id_t sgw_ue_id;
     ogs_pool_id_t mme_ue_id;
+    ogs_pool_id_t sess_id;
     ogs_pool_id_t bearer_id;
     ogs_pool_id_t gtp_xact_id;
 

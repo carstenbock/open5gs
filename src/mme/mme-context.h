@@ -24,6 +24,7 @@
 
 #include "ogs-s1ap.h"
 #include "ogs-diameter-s6a.h"
+#include "ogs-diameter-s13.h"
 #include "ogs-gtp.h"
 #include "ogs-nas-eps.h"
 #include "ogs-app.h"
@@ -75,6 +76,24 @@ typedef struct served_gummei_s {
     uint8_t         mme_code[CODE_PER_MME];
 } served_gummei_t;
 
+/* Control EIR (S13) functionality */
+typedef struct mme_eir_s {
+    bool enabled;
+    const char  *host;
+    const char  *realm;
+
+    /* Whitelisted and greylisted equipment is always allowed, blacklisted
+     * always rejected (no knob, as in the AMF). Only "unknown to the EIR"
+     * (DIAMETER_ERROR_EQUIPMENT_UNKNOWN) is operator policy. */
+    ogs_eir_action_e unknown_action;
+
+    uint32_t    timeout;             /* s, ECR answer deadline. On expiry
+                                       * failure_action applies. 0 = none */
+    ogs_eir_action_e failure_action;  /* No verdict: EIR unreachable, error
+                                       * answer, or no answer within timeout */
+    ogs_eir_action_e missing_pei_action; /* no usable IMEISV to check */
+} mme_eir_t;
+
 typedef struct mme_context_s {
     const char          *diam_conf_path;  /* MME Diameter conf path */
     ogs_diam_config_t   *diam_config;     /* MME Diameter config */
@@ -94,18 +113,24 @@ typedef struct mme_context_s {
     ogs_sockaddr_t  *pgw_addr;      /* First IPv4 Address Selected */
     ogs_sockaddr_t  *pgw_addr6;     /* First IPv6 Address Selected */
 
-    /* TS 29.303 DNS S-NAPTR based PGW (S5/S8) discovery.
-     * Opt-in: when disabled (default), PGW selection is unchanged. */
+    /* DNS-based SGW/PGW selection (3GPP TS 29.303) */
+#define MME_DNS_MAX_SERVER 4
     struct {
-        bool        enabled;
-        /* Application protocol tag to filter NAPTR records on. */
-#define MME_PGW_DISCOVERY_IFACE_S8      0   /* x-s8-gtp (home-routed) */
-#define MME_PGW_DISCOVERY_IFACE_S5      1   /* x-s5-gtp */
-#define MME_PGW_DISCOVERY_IFACE_BOTH    2   /* x-s5-gtp or x-s8-gtp */
-        int         iface;
-    } pgw_discovery;
+        bool enabled;               /* `mme.dns` section present */
+        int num_of_server;
+        struct {
+            const char *address;
+            uint16_t port;          /* default 53 */
+        } server[MME_DNS_MAX_SERVER];
+        int timeout;                /* seconds per query round, default 2 */
+        int retries;                /* default 2 */
+        int protocol;               /* mme_dns_proto_e: auto | s5 | s8 */
+        int cache_ttl;              /* NAPTR/SRV cache TTL (s), default 60 */
+        int guard_timeout;          /* overall guard (ms), default 3000 */
+    } dns;
 
     ogs_list_t      enb_list;       /* ENB S1AP Client List */
+    unsigned int    num_of_setup_enb; /* Associations admitted by S1 Setup */
 
     ogs_list_t      vlr_list;       /* VLR SGsAP Client List */
     ogs_list_t      csmap_list;     /* TAI-LAI Map List */
@@ -191,6 +216,7 @@ typedef struct mme_context_s {
          * entry for the emergency APN is required. */
         ogs_session_t session;
     } emergency;
+    mme_eir_t eir;     /* Control EIR functionality */
 } mme_context_t;
 
 typedef struct mme_sgsn_route_s {
@@ -212,6 +238,10 @@ typedef struct mme_sgw_s {
     int             num_of_tac;
     uint32_t        e_cell_id[OGS_MAX_NUM_OF_CELL_ID];
     int             num_of_e_cell_id;
+
+    /* Node discovered via DNS (TS 29.303), not from the configuration
+     * file. Such nodes are kept for the lifetime of the process. */
+    bool            dns_origin;
 
     ogs_list_t      sgw_ue_list;
 
@@ -283,6 +313,7 @@ typedef struct mme_enb_s {
 
     ogs_fsm_t       sm;         /* A state machine */
 
+    bool            setup_complete;
     bool            enb_id_presence;
     uint32_t        enb_id;     /* eNB_ID received from eNB */
     /* Optional human-readable eNB name from the S1SetupRequest eNBname
@@ -292,10 +323,6 @@ typedef struct mme_enb_s {
     char            enb_name[64];
     ogs_plmn_id_t   plmn_id;    /* eNB PLMN-ID received from eNB */
     ogs_sctp_sock_t sctp;       /* SCTP socket */
-
-    struct {
-        bool s1_setup_success;  /* eNB S1AP Setup complete successfuly */
-    } state;
 
     int             max_num_of_ostreams;/* SCTP Max num of outbound streams */
     uint16_t        ostream_id;         /* enb_ostream_id generator */
@@ -365,6 +392,22 @@ struct enb_ue_s {
 #define S1AP_UE_CTX_REL_S1_PAGING                           7
     uint8_t         ue_ctx_rel_action;
 
+/*
+ * An S1 context may outlive the procedure that created it. During
+ * handover the target enb_ue is linked to the mme_ue before the UE has
+ * moved, and it is only unlinked and removed when the eNB answers
+ * UEContextReleaseCommand with UEContextReleaseComplete.
+ *
+ * An eNB that owns such a context - for example a handover target after
+ * HandoverCancel - must not be able to drive UE/bearer procedures with
+ * it, since that would let it act on a UE that is still served by
+ * another eNB. Use this to require that the context is both the serving
+ * one and not already being released.
+ */
+#define ENB_UE_IS_SERVING(__mME, __eNB) \
+    ((__eNB)->id == (__mME)->enb_ue_id && \
+     (__eNB)->ue_ctx_rel_action == S1AP_UE_CTX_REL_INVALID_ACTION)
+
     bool            part_of_s1_reset_requested;
 
     /* Related Context */
@@ -402,6 +445,10 @@ struct sgw_ue_s {
 };
 
 typedef struct mme_ue_memento_s {
+    /* NAS key identifiers changed by an unauthenticated Attach. */
+    uint8_t ue_ksi, ue_tsc;
+    uint8_t mme_ksi, mme_tsc;
+
     /* UE network capability info: supported network features. */
     ogs_nas_ue_network_capability_t ue_network_capability;
     /* MS network capability info: supported network features. */
@@ -426,6 +473,7 @@ typedef struct mme_ue_memento_s {
     uint32_t dl_count;
     /* Uplink counter (24-bit stored in uint32_t) */
     uint32_t ul_count;
+    bool ul_count_accepted;
     /* eNB key derived from kasme */
     uint8_t kenb[OGS_SHA256_DIGEST_SIZE];
     /* Hash used for NAS message integrity */
@@ -478,6 +526,9 @@ struct mme_ue_s {
 #define MME_EPS_TYPE_DETACH_REQUEST_TO_UE           6
         uint8_t     type;
 
+        /* mme identifies the stored EPS NAS security context. ue records
+         * the received identifier; short Service Request infers its TSC
+         * from the current context because the message carries only KSI. */
         struct {
         ED3(uint8_t tsc:1;,
             uint8_t ksi:3;,
@@ -527,6 +578,14 @@ struct mme_ue_s {
     char            imeisv_bcd[OGS_MAX_IMEISV_BCD_LEN+1];
     ogs_nas_mobile_identity_imeisv_t nas_mobile_identity_imeisv;
 
+    /*
+     * EIR (S13): ME identity check of the current attach. The id is
+     * carried by the ECR and must match on the answer, so that a late
+     * ECA of a cancelled or replaced procedure is ignored.
+     */
+    bool        eir_check_pending;
+    uint32_t    eir_check_id;
+
     uint8_t         msisdn[OGS_MAX_MSISDN_LEN];
     int             msisdn_len;
     char            msisdn_bcd[OGS_MAX_MSISDN_BCD_LEN+1];
@@ -545,6 +604,9 @@ struct mme_ue_s {
         ogs_timer_t     *t_gn_holding;
         ogs_pool_id_t   gtp_xact_id; /* 2g->4g SGSN Context Req/Resp/Ack gtp1c xact */
     } gn;
+
+    /* Received TAU identity, separate from the pending GUTI allocation. */
+    ogs_nas_eps_guti_t old_guti;
 
     struct {
 #define MME_NEXT_GUTI_IS_AVAILABLE(__mME) ((__mME)->next.m_tmsi)
@@ -583,7 +645,7 @@ struct mme_ue_s {
     ((__mME) && \
     ((__mME)->security_context_available == 1) && \
      ((__mME)->mac_failed == 0) && \
-     ((__mME)->nas_eps.ue.ksi != OGS_NAS_KSI_NO_KEY_IS_AVAILABLE))
+     ((__mME)->nas_eps.mme.ksi != OGS_NAS_KSI_NO_KEY_IS_AVAILABLE))
 /* KI-153: valid NAS security context and subscription data still valid */
 #define SECURITY_CONTEXT_REUSABLE(__mME) \
     (SECURITY_CONTEXT_IS_VALID(__mME) && !(__mME)->subscription_withdrawn)
@@ -596,6 +658,8 @@ struct mme_ue_s {
     } while(0)
     int             security_context_available;
     int             mac_failed;
+    /* The secure exchange of NAS messages is established on the connection */
+    bool            integrity_verified;
 
     /*
      * KI-153: the HSS withdrew the subscription (CLR with
@@ -622,6 +686,9 @@ struct mme_ue_s {
 
     /* flag: 1 = allow restoration of context, 0 = disallow */
     bool            can_restore_context;
+
+    /* Authenticated Attach waiting for the old PDN sessions to be deleted. */
+    bool            attach_session_delete_pending;
 
     /*
      * ue_context_will_remove:
@@ -671,6 +738,15 @@ struct mme_ue_s {
         } __attribute__ ((packed));
         uint32_t i32;
     } ul_count;
+    /*
+     * Set once an uplink NAS message has been accepted in the current
+     * EPS NAS security context. While it is false, 'ul_count' does not yet
+     * hold a "last accepted" value and the replay check is not applied.
+     *
+     * Both are cleared by the MME when it takes a new security context
+     * into use, never by the security header type of a received message.
+     */
+    bool            ul_count_accepted;
     /* eNB key derived from kasme */
     uint8_t         kenb[OGS_SHA256_DIGEST_SIZE];
     /* Hash used for NAS message integrity */
@@ -712,10 +788,6 @@ struct mme_ue_s {
     int num_of_session;
     ogs_session_t session[OGS_MAX_NUM_OF_SESS];
 
-    /* Per-UE copy of the Emergency Configuration Data. Create Session Response
-     * writes back ue_ip/ambr, so the global template must not be shared. */
-    ogs_session_t emergency_session;
-
     /* ESM Info */
     ogs_list_t      sess_list;
 
@@ -726,6 +798,9 @@ struct mme_ue_s {
 #define CLEAR_EPS_BEARER_ID(__mME) \
     do { \
         ogs_assert((__mME)); \
+        ogs_info("[EBI-TRACK] CLEAR_EPS_BEARER_ID ue_id[%d] IMSI[%s] " \
+                "bitmap[0x%04x]", \
+                (__mME)->id, (__mME)->imsi_bcd, (__mME)->ebi_bitmap); \
         (__mME)->ebi_bitmap = 0; \
     } while(0)
 
@@ -744,17 +819,33 @@ struct mme_ue_s {
       (enb_ue_find_by_id((__mME)->enb_ue_id) == NULL)))
     ogs_pool_id_t   enb_ue_id;
 
-#define HOLDING_S1_CONTEXT(__mME) \
+/*
+ * Put the S1 context __sERVING is using on hold, and record the hold in
+ * __hOLDER.
+ *
+ * __hOLDER and __sERVING are the same MME-UE context in the ordinary
+ * case, which HOLDING_S1_CONTEXT() below spells out. They differ only in
+ * mme_ue_set_imsi(), where the S1 context and the sessions still belong
+ * to the old MME-UE while the hold has to be recorded in the new one,
+ * because the old context is removed as soon as its sessions have been
+ * moved across.
+ *
+ * Each half of this names the UE after the context it is about: the S1
+ * context released on the way in is __hOLDER's, the one put on hold is
+ * __sERVING's. They are the same imsi_bcd unless the two differ.
+ */
+#define HOLDING_S1_CONTEXT_FOR(__hOLDER, __sERVING) \
     do { \
         enb_ue_t *enb_ue_holding = NULL; \
         \
-        enb_ue_holding = enb_ue_find_by_id((__mME)->enb_ue_holding_id); \
+        /* Whatever __hOLDER is already holding, named after __hOLDER */ \
+        enb_ue_holding = enb_ue_find_by_id((__hOLDER)->enb_ue_holding_id); \
         if (enb_ue_holding) { \
             int r; \
             ogs_warn("[%s] Holding S1 context already exists", \
-                    (__mME)->imsi_bcd); \
+                    (__hOLDER)->imsi_bcd); \
             ogs_warn("[%s]    ENB_UE_S1AP_ID[%d] MME_UE_S1AP_ID[%d]", \
-                    (__mME)->imsi_bcd, \
+                    (__hOLDER)->imsi_bcd, \
                     enb_ue_holding->enb_ue_s1ap_id, \
                     enb_ue_holding->mme_ue_s1ap_id); \
             r = s1ap_send_ue_context_release_command( \
@@ -762,19 +853,20 @@ struct mme_ue_s {
                     S1AP_Cause_PR_nas, S1AP_CauseNas_normal_release, \
                     S1AP_UE_CTX_REL_S1_CONTEXT_REMOVE, 0); \
             ogs_expect(r == OGS_OK); \
-        } else if ((__mME)->enb_ue_holding_id != OGS_INVALID_POOL_ID) { \
+        } else if ((__hOLDER)->enb_ue_holding_id != OGS_INVALID_POOL_ID) { \
             ogs_warn("[%s] Holding S1 context has already been removed", \
-                    (__mME)->imsi_bcd); \
+                    (__hOLDER)->imsi_bcd); \
         } \
-        (__mME)->enb_ue_holding_id = OGS_INVALID_POOL_ID; \
+        (__hOLDER)->enb_ue_holding_id = OGS_INVALID_POOL_ID; \
         \
-        enb_ue_holding = enb_ue_find_by_id((__mME)->enb_ue_id); \
+        /* The context being held is __sERVING's, and is named after it */ \
+        enb_ue_holding = enb_ue_find_by_id((__sERVING)->enb_ue_id); \
         if (enb_ue_holding) { \
             enb_ue_holding->mme_ue_id = OGS_INVALID_POOL_ID; \
             \
-            ogs_warn("[%s] Holding S1 Context", (__mME)->imsi_bcd); \
+            ogs_warn("[%s] Holding S1 Context", (__sERVING)->imsi_bcd); \
             ogs_warn("[%s]    ENB_UE_S1AP_ID[%d] MME_UE_S1AP_ID[%d]", \
-                    (__mME)->imsi_bcd, \
+                    (__sERVING)->imsi_bcd, \
                     enb_ue_holding->enb_ue_s1ap_id, \
                     enb_ue_holding->mme_ue_s1ap_id); \
             \
@@ -783,11 +875,13 @@ struct mme_ue_s {
             ogs_timer_start(enb_ue_holding->t_s1_holding, \
                     mme_timer_cfg(MME_TIMER_S1_HOLDING)->duration); \
             \
-            (__mME)->enb_ue_holding_id = (__mME)->enb_ue_id; \
+            (__hOLDER)->enb_ue_holding_id = (__sERVING)->enb_ue_id; \
         } else \
             ogs_error("[%s] S1 Context has already been removed", \
-                    (__mME)->imsi_bcd); \
+                    (__sERVING)->imsi_bcd); \
     } while(0)
+#define HOLDING_S1_CONTEXT(__mME) \
+    HOLDING_S1_CONTEXT_FOR((__mME), (__mME))
 #define CLEAR_S1_CONTEXT(__mME) \
     do { \
         enb_ue_t *enb_ue_holding = NULL; \
@@ -822,6 +916,7 @@ struct mme_ue_s {
         ogs_debug("[%s] Clear Paging Info", (__mME)->imsi_bcd); \
         (__mME)->paging.type = 0; \
         (__mME)->paging.failed = false; \
+        (__mME)->paging.esm_cause = OGS_NAS_ESM_CAUSE_REGULAR_DEACTIVATION; \
     } while(0)
 
 #define MME_STORE_PAGING_INFO(__mME, __tYPE, __dATA) \
@@ -845,6 +940,8 @@ struct mme_ue_s {
         int type;
         void *data;
         bool failed;
+        uint8_t esm_cause; /* NAS ESM cause carried across paging to the
+                            * deferred (post-paging) deactivation/detach */
     } paging;
 
     /* SGW UE context */
@@ -948,6 +1045,12 @@ struct mme_ue_s {
 
     mme_csmap_t     *csmap;
     mme_hssmap_t    *hssmap;
+
+    /* HSS identity dynamically learned from the Origin-Host/Origin-Realm
+     * of successful S6a answers (AIA/ULA), used as Destination-Host/Realm
+     * in subsequent requests as per 3GPP TS 29.272 clause 7.1.6. */
+    char            *hss_host;
+    char            *hss_realm;
 };
 
 #define MME_UE_REMOVE_WITH_PAGING_FAIL(__mME) \
@@ -1019,6 +1122,7 @@ typedef struct mme_sess_s {
     /* Related Context */
     ogs_pool_id_t   mme_ue_id;
 
+    /* Owned PDN configuration, independent of the UE subscription list. */
     ogs_session_t   *session;
 
     /* PDN Address Allocation (PAA) */
@@ -1041,6 +1145,9 @@ typedef struct mme_sess_s {
 
     /* Save Extended Protocol Configuration Options from PGW */
     ogs_tlv_octet_t pgw_epco;
+
+    /* DNS-based gateway selection state (mme-dns.c pool id) */
+    ogs_pool_id_t   dns_id;
 } mme_sess_t;
 
 #define MME_HAVE_ENB_S1U_PATH(__bEARER) \
@@ -1088,6 +1195,10 @@ typedef struct mme_bearer_s {
 
     uint8_t         ebi;            /* EPS Bearer ID */
 
+    /* [EBI-TRACK] when this bearer context was created, so leaked
+     * bearers can be identified by their age at dump time. */
+    ogs_time_t      trace_created;
+
     uint32_t        enb_s1u_teid;
     ogs_ip_t        enb_s1u_ip;
     uint32_t        sgw_s1u_teid;
@@ -1097,6 +1208,9 @@ typedef struct mme_bearer_s {
 
     uint32_t        target_s1u_teid;    /* Target S1U TEID from HO-Req-Ack */
     ogs_ip_t        target_s1u_ip;      /* Target S1U ADDR from HO-Req-Ack */
+
+    /* E-RABSetupRequest sent, its response not yet */
+    bool            e_rab_setup_request_pending;
 
     uint32_t        enb_dl_teid;
     ogs_ip_t        enb_dl_ip;
@@ -1158,9 +1272,12 @@ typedef struct mme_bearer_s {
     } update;
 
     /*
-     * ESM cause for the Deactivate EPS Bearer Context Request that answers
-     * a network-initiated Delete Bearer Request. 0 means
-     * OGS_NAS_ESM_CAUSE_REGULAR_DEACTIVATION (#36).
+     * ESM cause mapped from the last network-initiated Delete Bearer Request
+     * of this bearer; 0 means OGS_NAS_ESM_CAUSE_REGULAR_DEACTIVATION (#36).
+     * Only read by other_pdns_released_with_reactivation() in
+     * mme-s11-handler.c. The cause sent to the UE is passed to
+     * nas_eps_send_deactivate_bearer_context_request() and carried across
+     * paging in mme_ue->paging.esm_cause.
      */
     uint8_t         deactivation_esm_cause;
 } mme_bearer_t;
@@ -1212,7 +1329,13 @@ void mme_hssmap_remove_all(void);
 
 mme_hssmap_t *mme_hssmap_find_by_imsi_bcd(const char *imsi_bcd);
 
+void mme_ue_set_hss_identity(mme_ue_t *mme_ue,
+        const uint8_t *host, size_t host_len,
+        const uint8_t *realm, size_t realm_len);
+void mme_ue_clear_hss_identity(mme_ue_t *mme_ue);
+
 mme_enb_t *mme_enb_add(ogs_sock_t *sock, ogs_sockaddr_t *addr);
+void mme_enb_mark_setup_complete(mme_enb_t *enb);
 int mme_enb_remove(mme_enb_t *enb);
 int mme_enb_remove_all(void);
 mme_enb_t *mme_enb_find_by_addr(const ogs_sockaddr_t *addr);
@@ -1243,6 +1366,8 @@ typedef enum {
 sgw_relocation_e sgw_ue_check_if_relocated(mme_ue_t *mme_ue);
 
 void mme_ue_new_guti(mme_ue_t *mme_ue);
+void mme_ue_publish_next_guti(mme_ue_t *mme_ue);
+void mme_ue_unpublish_next_guti(mme_ue_t *mme_ue);
 void mme_ue_confirm_guti(mme_ue_t *mme_ue);
 
 #define INVALID_P_TMSI 0
@@ -1265,8 +1390,20 @@ mme_ue_t *mme_ue_find_by_guti(const ogs_nas_eps_guti_t *nas_guti);
 mme_ue_t *mme_ue_find_by_s11_local_teid(uint32_t teid);
 mme_ue_t *mme_ue_find_by_gn_local_teid(uint32_t teid);
 
-mme_ue_t *mme_ue_find_by_message(const ogs_nas_eps_message_t *message);
-int mme_ue_set_imsi(mme_ue_t *mme_ue, char *imsi_bcd);
+mme_ue_t *mme_ue_find_by_message(
+        const ogs_nas_eps_message_t *message, bool *pending_guti);
+
+/* Which procedure supplied the IMSI - logged at the OLD UE context
+ * migration, so we can tell which callers actually reach it. */
+typedef enum {
+    MME_UE_IMSI_FROM_ATTACH_REQUEST = 0,
+    MME_UE_IMSI_FROM_IDENTITY_RESPONSE,
+    MME_UE_IMSI_FROM_SGSN_CONTEXT_RESPONSE,
+    MME_UE_IMSI_FROM_AUTHENTICATION_RESPONSE,
+} mme_ue_imsi_source_e;
+
+int mme_ue_set_imsi(mme_ue_t *mme_ue, char *imsi_bcd,
+        mme_ue_imsi_source_e source);
 
 bool mme_ue_have_indirect_tunnel(mme_ue_t *mme_ue);
 void mme_ue_clear_indirect_tunnel(mme_ue_t *mme_ue);
@@ -1339,6 +1476,7 @@ void sgw_ue_source_deassociate_target(sgw_ue_t *sgw_ue);
 mme_sess_t *mme_sess_add(mme_ue_t *mme_ue, uint8_t pti);
 void mme_sess_remove(mme_sess_t *sess);
 void mme_sess_remove_all(mme_ue_t *mme_ue);
+void mme_sess_set_session(mme_sess_t *sess, const ogs_session_t *session);
 mme_sess_t *mme_sess_find_by_pti(const mme_ue_t *mme_ue, uint8_t pti);
 mme_sess_t *mme_sess_find_by_ebi(const mme_ue_t *mme_ue, uint8_t ebi);
 mme_sess_t *mme_sess_find_by_apn(const mme_ue_t *mme_ue, const char *apn);
@@ -1372,6 +1510,10 @@ mme_m_tmsi_t *mme_m_tmsi_alloc(void);
 int mme_m_tmsi_free(mme_m_tmsi_t *tmsi);
 
 uint8_t mme_ebi_alloc(mme_ue_t *mme_ue);
+
+/* [EBI-TRACK] instrumentation helpers */
+const char *mme_ebi_track_esm_state_name(mme_bearer_t *bearer);
+void mme_ebi_track_dump(mme_ue_t *mme_ue, const char *reason);
 int mme_ebi_free(mme_ue_t *mme_ue, int ebi);
 int mme_ebi_reserve(mme_ue_t *mme_ue, int ebi);
 

@@ -258,6 +258,30 @@ ogs_sbi_xact_t *smf_namf_comm_create_n1_n2_message_xact(
     ogs_sbi_discovery_option_set_target_nf_instance_id(
             discovery_option, sess->amf_nf_id);
 
+    /*
+     * [Issue #4741]
+     *
+     * In the H-SMF the AMF this is addressed to lives in the serving
+     * PLMN, so the discovery has to say which PLMN to look in, the same
+     * way the AMF names the home PLMN when it discovers the AUSF or the
+     * UDM of a roaming UE. Without it the discovery stays in the home
+     * PLMN, finds no AMF and the transfer fails with 504, which is why a
+     * network triggered Service Request never left the H-SMF.
+     */
+    if (HOME_ROUTED_ROAMING_IN_HSMF(sess)) {
+        int i;
+
+        ogs_sbi_discovery_option_add_target_plmn_list(
+                discovery_option, &sess->serving_plmn_id);
+
+        ogs_assert(ogs_local_conf()->num_of_serving_plmn_id);
+        for (i = 0; i < ogs_local_conf()->num_of_serving_plmn_id; i++) {
+            ogs_sbi_discovery_option_add_requester_plmn_list(
+                    discovery_option,
+                    &ogs_local_conf()->serving_plmn_id[i]);
+        }
+    }
+
     xact = ogs_sbi_xact_add(
             sess->id, &sess->sbi, OpenAPI_service_name_namf_comm,
             discovery_option,
@@ -274,6 +298,18 @@ ogs_sbi_xact_t *smf_namf_comm_create_n1_n2_message_xact(
         xact->assoc_stream_id = ogs_sbi_id_from_stream(stream);
         ogs_assert(xact->assoc_stream_id >= OGS_MIN_POOL_ID &&
                 xact->assoc_stream_id <= OGS_MAX_POOL_ID);
+
+        if (HOME_ROUTED_ROAMING_IN_VSMF(sess) &&
+                param->state == SMF_NETWORK_REQUESTED_QOS_FLOW_MODIFICATION) {
+            /* Save before sending or queuing N1N2. The UE may complete the
+             * modification before the AMF's transfer response arrives. */
+            if (sess->vsmf_to_hsmf_modify_stream_id >= OGS_MIN_POOL_ID &&
+                sess->vsmf_to_hsmf_modify_stream_id <= OGS_MAX_POOL_ID)
+                ogs_error("N1 N2 modified stream ID [%d] "
+                        "has not been used yet",
+                        sess->vsmf_to_hsmf_modify_stream_id);
+            sess->vsmf_to_hsmf_modify_stream_id = xact->assoc_stream_id;
+        }
     }
 
     return xact;
@@ -409,10 +445,11 @@ void smf_sbi_send_sm_context_create_error(
         ogs_pkbuf_free(n1smbuf);
 }
 
-void smf_sbi_send_pdu_session_created_data(
+bool smf_sbi_send_pdu_session_created_data(
         smf_sess_t *sess, ogs_sbi_stream_t *stream)
 {
     int rv;
+    bool success = false;
     OpenAPI_pdu_session_created_data_t PduSessionCreatedData;
 
     OpenAPI_tunnel_info_t hcnTunnelInfo;
@@ -533,15 +570,8 @@ void smf_sbi_send_pdu_session_created_data(
 
     ogs_free(authorized_qos_rules.buffer);
 
-    enc_len = ogs_base64_encoded_size(
-            authorized_qos_flow_descriptions.length);
-    ogs_assert(enc_len > 0);
-    qosFlowSetupItem->qos_flow_description = ogs_calloc(1, enc_len);
-    ogs_assert(qosFlowSetupItem->qos_flow_description);
-    ogs_assert(ogs_base64_encode_from_buffer(
-            qosFlowSetupItem->qos_flow_description, enc_len,
-            authorized_qos_flow_descriptions.buffer,
-            authorized_qos_flow_descriptions.length) > 0);
+    qosFlowSetupItem->qos_flow_description =
+        gsm_encode_qos_flow_description_ie(&authorized_qos_flow_descriptions);
 
     ogs_free(authorized_qos_flow_descriptions.buffer);
 
@@ -619,7 +649,14 @@ void smf_sbi_send_pdu_session_created_data(
     memset(&sendmsg, 0, sizeof(sendmsg));
 
     n1SmBufToUe = gsmue_build_pdu_session_establishment_accept(sess);
-    ogs_assert(n1SmBufToUe);
+    if (!n1SmBufToUe) {
+        ogs_error("gsmue_build_pdu_session_establishment_accept() failed");
+        smf_sbi_send_pdu_session_create_error(stream,
+                OGS_SBI_HTTP_STATUS_BAD_REQUEST, OGS_SBI_APP_ERRNO_NULL,
+                OGS_5GSM_CAUSE_SEMANTICALLY_INCORRECT_MESSAGE,
+                "Invalid protocol configuration options", NULL, NULL);
+        goto end;
+    }
 
     n1SmInfoToUe.content_id = (char *)OGS_SBI_CONTENT_5GNAS_SM_ID;
     PduSessionCreatedData.n1_sm_info_to_ue = &n1SmInfoToUe;
@@ -653,6 +690,7 @@ void smf_sbi_send_pdu_session_created_data(
     ogs_assert(true == ogs_sbi_server_send_response(stream, response));
 
     ogs_free(sendmsg.http.location);
+    success = true;
 
 end:
     if (hcnTunnelInfo.ipv4_addr)
@@ -673,6 +711,11 @@ end:
         ogs_free(PduSessionCreatedData.ue_ipv4_address);
     if (PduSessionCreatedData.ue_ipv6_prefix)
         ogs_free(PduSessionCreatedData.ue_ipv6_prefix);
+
+    if (n1SmBufToUe)
+        ogs_pkbuf_free(n1SmBufToUe);
+
+    return success;
 }
 
 void smf_sbi_send_sm_context_updated_data(
@@ -692,7 +735,23 @@ void smf_sbi_send_sm_context_updated_data(
     OpenAPI_ref_to_binary_data_t n2SmInfo;
 
     ogs_assert(sess);
-    ogs_assert(stream);
+
+    /*
+     * Called from the PFCP response handler, the AMF stream
+     * may have been closed while waiting for the UPF.
+     */
+    if (!stream) {
+        smf_ue_t *smf_ue = smf_ue_find_by_id(sess->smf_ue_id);
+        ogs_assert(smf_ue);
+
+        ogs_error("[%s:%d] STREAM has already been removed",
+                smf_ue->supi, sess->psi);
+        if (n1smbuf)
+            ogs_pkbuf_free(n1smbuf);
+        if (n2smbuf)
+            ogs_pkbuf_free(n2smbuf);
+        return;
+    }
 
     ogs_assert(up_cnx_state != OpenAPI_up_cnx_state_NULL ||
                 ho_state != OpenAPI_ho_state_NULL ||

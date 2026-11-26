@@ -42,6 +42,8 @@ int ngap_open(void)
 
 void ngap_close(void)
 {
+    /* Remove per-gNB poll registrations as well as the listening sockets. */
+    amf_gnb_remove_all();
     ogs_socknode_remove_all(&amf_self()->ngap_list);
     ogs_socknode_remove_all(&amf_self()->ngap_list6);
 }
@@ -129,34 +131,13 @@ int ngap_delayed_send_to_ran_ue(
     }
 }
 
-int ngap_send_to_5gsm(amf_ue_t *amf_ue, ogs_pkbuf_t *esmbuf)
-{
-    int rv;
-    amf_event_t *e = NULL;
-
-    ogs_assert(amf_ue);
-    ogs_assert(esmbuf);
-
-    e = amf_event_new(AMF_EVENT_5GSM_MESSAGE);
-    ogs_assert(e);
-    e->amf_ue_id = amf_ue->id;
-    e->pkbuf = esmbuf;
-    rv = ogs_queue_push(ogs_app()->queue, e);
-    if (rv != OGS_OK) {
-        ogs_error("ogs_queue_push() failed:%d", (int)rv);
-        ogs_pkbuf_free(e->pkbuf);
-        ogs_event_free(e);
-    }
-
-    return rv;
-}
- 
 int ngap_send_to_nas(ran_ue_t *ran_ue,
         NGAP_ProcedureCode_t procedureCode, NGAP_NAS_PDU_t *nasPdu)
 {
     int rv;
 
     amf_ue_t *amf_ue = NULL;
+    int mac_failed = 0;
 
     ogs_nas_5gs_security_header_t *sh = NULL;
     ogs_nas_security_header_type_t security_header_type;
@@ -168,9 +149,9 @@ int ngap_send_to_nas(ran_ue_t *ran_ue,
     ogs_assert(ran_ue);
     ogs_assert(nasPdu);
 
+    /* TS24.501 4.4.4.3, 7.2.1: discard the message, keep the NG context */
     if (nasPdu->size < sizeof(ogs_nas_5gmm_header_t)) {
         ogs_error("NAS PDU too short [%d]", (int)nasPdu->size);
-        ran_ue_remove(ran_ue);
         return OGS_ERROR;
     }
 
@@ -210,7 +191,6 @@ int ngap_send_to_nas(ran_ue_t *ran_ue,
         ogs_error("Not implemented(security header type:0x%x)",
                 sh->security_header_type);
         ogs_pkbuf_free(nasbuf);
-        ran_ue_remove(ran_ue);
         return OGS_ERROR;
     }
 
@@ -226,7 +206,6 @@ int ngap_send_to_nas(ran_ue_t *ran_ue,
             ogs_error("NAS PDU too short for security header [%d]",
                     (int)nasPdu->size);
             ogs_pkbuf_free(nasbuf);
-            ran_ue_remove(ran_ue);
             return OGS_ERROR;
         }
     }
@@ -239,16 +218,19 @@ int ngap_send_to_nas(ran_ue_t *ran_ue,
     if (nasbuf->len < sizeof(ogs_nas_5gmm_header_t)) {
         ogs_error("NAS PDU too short for 5GMM header [%d]", (int)nasbuf->len);
         ogs_pkbuf_free(nasbuf);
-        ran_ue_remove(ran_ue);
         return OGS_ERROR;
     }
 
     if (amf_ue) {
-        if (nas_5gs_security_decode(amf_ue,
-                security_header_type, nasbuf) != OGS_OK) {
+        rv = nas_5gs_security_decode(amf_ue, security_header_type, nasbuf);
+
+        /* The verdict goes with the message, and not with the UE */
+        mac_failed = amf_ue->mac_failed;
+        amf_ue->mac_failed = 0;
+
+        if (rv != OGS_OK) {
             ogs_error("nas_5gs_security_decode failed()");
             ogs_pkbuf_free(nasbuf);
-            ran_ue_remove(ran_ue);
             return OGS_ERROR;
         }
     }
@@ -265,7 +247,7 @@ int ngap_send_to_nas(ran_ue_t *ran_ue,
             /*
              * 3GPP TS 38.413 clause 10.4:
              * Logical error in the NAS PDU carried in INITIAL UE MESSAGE.
-             * Reply with ERROR INDICATION before cleaning up the
+             * Reply with ERROR INDICATION; the caller cleans up the
              * (newly-created) ran_ue context.
              */
             ogs_expect(OGS_OK == ngap_send_error_indication2(ran_ue,
@@ -273,7 +255,6 @@ int ngap_send_to_nas(ran_ue_t *ran_ue,
                     NGAP_CauseProtocol_semantic_error));
 
             ogs_pkbuf_free(nasbuf);
-            ran_ue_remove(ran_ue);
 
             return OGS_ERROR;
         }
@@ -299,7 +280,6 @@ int ngap_send_to_nas(ran_ue_t *ran_ue,
                     NGAP_CauseProtocol_message_not_compatible_with_receiver_state));
 
             ogs_pkbuf_free(nasbuf);
-            ran_ue_remove(ran_ue);
 
             return OGS_ERROR;
         }
@@ -316,6 +296,7 @@ int ngap_send_to_nas(ran_ue_t *ran_ue,
         e->ran_ue_id = ran_ue->id;
         e->ngap.code = procedureCode;
         e->nas.type = security_header_type.type;
+        e->nas.mac_failed = mac_failed;
         e->pkbuf = nasbuf;
         rv = ogs_queue_push(ogs_app()->queue, e);
         if (rv != OGS_OK) {
@@ -326,21 +307,19 @@ int ngap_send_to_nas(ran_ue_t *ran_ue,
         return rv;
     } else if (h->extended_protocol_discriminator ==
             OGS_NAS_EXTENDED_PROTOCOL_DISCRIMINATOR_5GSM) {
-        if (!amf_ue) {
-            ogs_error("No UE Context");
-            ogs_pkbuf_free(nasbuf);
-            return OGS_ERROR;
-        }
-        rv = ngap_send_to_5gsm(amf_ue, nasbuf);
-        ogs_expect(rv == OGS_OK);
-
-        return rv;
+        /*
+         * TS 24.501 4.4.4.3, 8.2.10: a 5GSM message travels in an
+         * UL NAS TRANSPORT. No state machine takes one on its own, so
+         * discard it here instead of queueing a buffer nobody frees.
+         */
+        ogs_error("5GSM message outside UL NAS TRANSPORT");
+        ogs_pkbuf_free(nasbuf);
+        return OGS_ERROR;
     } else {
         ogs_error("Unknown NAS Protocol discriminator 0x%02x",
                   h->extended_protocol_discriminator);
 
         ogs_pkbuf_free(nasbuf);
-        ran_ue_remove(ran_ue);
 
         return OGS_ERROR;
     }
@@ -391,7 +370,7 @@ void ngap_send_amf_configuration_update_all(void)
     int count = 0;
 
     ogs_list_for_each(&amf_self()->gnb_list, gnb) {
-        if (gnb->state.ng_setup_success == true) {
+        if (gnb->setup_complete) {
             ngap_send_amf_configuration_update(gnb);
             count++;
         }
@@ -401,7 +380,8 @@ void ngap_send_amf_configuration_update_all(void)
 }
 
 int ngap_send_ng_setup_failure(
-        amf_gnb_t *gnb, NGAP_Cause_PR group, long cause)
+        amf_gnb_t *gnb, NGAP_Cause_PR group, long cause,
+        NGAP_CriticalityDiagnostics_t *CriticalityDiagnostics)
 {
     int rv;
     ogs_pkbuf_t *ngap_buffer;
@@ -411,7 +391,7 @@ int ngap_send_ng_setup_failure(
     ogs_debug("NG-Setup failure");
 
     ngap_buffer = ngap_build_ng_setup_failure(
-            group, cause, NGAP_TimeToWait_v10s);
+            group, cause, NGAP_TimeToWait_v10s, CriticalityDiagnostics);
     if (!ngap_buffer) {
         ogs_error("ngap_build_ng_setup_failure() failed");
         return OGS_ERROR;
@@ -620,12 +600,99 @@ int ngap_send_path_switch_ack(amf_sess_t *sess)
     return rv;
 }
 
+/*
+ * TS 23.502 4.9.1.2.2 step 7: after the last SMF reply, acknowledge
+ * the switch if any session succeeded. Otherwise send Failure.
+ */
+int ngap_send_path_switch_result(amf_ue_t *amf_ue)
+{
+    int rv;
+
+    ran_ue_t *ran_ue = NULL;
+    amf_sess_t *sess = NULL, *switched = NULL;
+    ogs_pkbuf_t *ngapbuf = NULL;
+
+    ogs_assert(amf_ue);
+
+    ogs_list_for_each(&amf_ue->sess_list, sess) {
+        if (sess->transfer.path_switch_request_ack) {
+            switched = sess;
+            break;
+        }
+    }
+
+    if (switched) {
+        rv = ngap_send_path_switch_ack(switched);
+    } else {
+        ran_ue = ran_ue_find_by_id(amf_ue->ran_ue_id);
+        if (!ran_ue) {
+            ogs_error("[%s] NG context has already been removed",
+                    amf_ue->supi);
+            rv = OGS_NOTFOUND;
+        } else {
+            ngapbuf = ngap_build_path_switch_failure_by_sess(amf_ue);
+            if (!ngapbuf) {
+                ogs_error("ngap_build_path_switch_failure_by_sess() failed");
+                rv = OGS_ERROR;
+            } else {
+                rv = nas_5gs_send_to_gnb(amf_ue, ngapbuf);
+                ogs_expect(rv == OGS_OK);
+            }
+        }
+    }
+
+    AMF_UE_CLEAR_N2_TRANSFER(amf_ue, path_switch_request_ack);
+    AMF_UE_CLEAR_N2_TRANSFER(amf_ue, path_switch_request_unsuccessful);
+
+    return rv;
+}
+
+int ngap_send_path_switch_failure(
+        amf_gnb_t *gnb,
+        uint64_t ran_ue_ngap_id, uint64_t amf_ue_ngap_id,
+        NGAP_PDUSessionResourceToBeSwitchedDLList_t
+            *PDUSessionResourceToBeSwitchedDLList,
+        NGAP_Cause_PR group, long cause)
+{
+    int rv;
+    uint16_t stream_no;
+    ogs_pkbuf_t *ngapbuf = NULL;
+
+    ogs_assert(gnb);
+
+    if (gnb->max_num_of_ostreams < 2) {
+        ogs_error("Cannot send PathSwitchRequestFailure: "
+                "gNB has no UE-associated SCTP stream [MAX:%d]",
+                gnb->max_num_of_ostreams);
+        return OGS_NOTFOUND;
+    }
+
+    ngapbuf = ngap_build_path_switch_failure(
+            ran_ue_ngap_id, amf_ue_ngap_id,
+            PDUSessionResourceToBeSwitchedDLList, group, cause);
+    if (!ngapbuf) {
+        ogs_error("ngap_build_path_switch_failure() failed");
+        return OGS_ERROR;
+    }
+
+    /* Select a UE-associated stream on the requesting gNB. */
+    if (gnb->ostream_id >= gnb->max_num_of_ostreams)
+        gnb->ostream_id = 0;
+    stream_no = OGS_NEXT_ID(gnb->ostream_id, 1,
+            gnb->max_num_of_ostreams - 1);
+    rv = ngap_send_to_gnb(gnb, ngapbuf, stream_no);
+    ogs_expect(rv == OGS_OK);
+
+    return rv;
+}
+
 int ngap_send_handover_request(amf_ue_t *amf_ue)
 {
     int rv;
 
     ran_ue_t *source_ue = NULL, *target_ue = NULL;
     ogs_pkbuf_t *ngapbuf = NULL;
+    NGAP_Cause_t cause;
 
     if (!amf_ue) {
         ogs_error("UE(amf-ue) context has already been removed");
@@ -645,15 +712,29 @@ int ngap_send_handover_request(amf_ue_t *amf_ue)
     }
 
     ngapbuf = ngap_build_handover_request(target_ue);
-    if (!ngapbuf) {
+    if (ngapbuf) {
+        rv = ngap_send_to_ran_ue(target_ue, ngapbuf);
+        if (rv == OGS_OK)
+            return OGS_OK;
+    } else {
         ogs_error("ngap_build_handover_request() failed");
-        return OGS_ERROR;
     }
 
-    rv = ngap_send_to_ran_ue(target_ue, ngapbuf);
-    ogs_expect(rv == OGS_OK);
+    /*
+     * Preparation failed locally, for example when the transparent
+     * container and N2 SM transfers exceed the NGAP encoder buffer.
+     * Release the provisional target context and notify the source gNB.
+     */
+    source_ue_deassociate_target_ue(target_ue);
+    ran_ue_remove(target_ue);
+    OGS_ASN_CLEAR_DATA(&amf_ue->handover.container);
+    amf_ue->ho_rejected++;
 
-    return rv;
+    memset(&cause, 0, sizeof(cause));
+    cause.present = NGAP_Cause_PR_radioNetwork;
+    cause.choice.radioNetwork =
+        NGAP_CauseRadioNetwork_ho_failure_in_target_5GC_ngran_node_or_target_system;
+    return ngap_send_handover_preparation_failure(source_ue, &cause);
 }
 
 int ngap_send_handover_preparation_failure(
@@ -764,13 +845,25 @@ int ngap_send_error_indication(
         uint64_t *amf_ue_ngap_id,
         NGAP_Cause_PR group, long cause)
 {
+    return ngap_send_error_indication_with_diagnostics(
+            gnb, ran_ue_ngap_id, amf_ue_ngap_id, group, cause, NULL);
+}
+
+int ngap_send_error_indication_with_diagnostics(
+        amf_gnb_t *gnb,
+        uint64_t *ran_ue_ngap_id,
+        uint64_t *amf_ue_ngap_id,
+        NGAP_Cause_PR group, long cause,
+        NGAP_CriticalityDiagnostics_t *CriticalityDiagnostics)
+{
     int rv;
     ogs_pkbuf_t *ngapbuf = NULL;
 
     ogs_assert(gnb);
 
     ngapbuf = ogs_ngap_build_error_indication(
-            ran_ue_ngap_id, amf_ue_ngap_id, group, cause);
+            ran_ue_ngap_id, amf_ue_ngap_id, group, cause,
+            CriticalityDiagnostics);
     if (!ngapbuf) {
         ogs_error("ogs_ngap_build_error_indication() failed");
         return OGS_ERROR;

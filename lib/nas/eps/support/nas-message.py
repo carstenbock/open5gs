@@ -118,7 +118,7 @@ def v_lower(v):
     return re.sub(
             r'_+', '_',
             re.sub('3gpp', '', c_identifier(v).lower())).strip('_')
- 
+
 def get_cells(cells):
     iei = cells[0].text
     value = cells[1].text.encode('ascii', 'ignore').decode('utf-8')
@@ -198,7 +198,7 @@ msg_list["DOWNLINK NAS TRANSPORT"] = { "type" : "98" }
 msg_list["UPLINK NAS TRANSPORT"] = { "type" : "99" }
 msg_list["CS SERVICE NOTIFICATION"] = { "type" : "100" }
 msg_list["DOWNLINK GENERIC NAS TRANSPORT"] = { "type" : "104" }
-msg_list["UPLINK GENERIC NAS TRANSPORT"] = { "type" : "101" }
+msg_list["UPLINK GENERIC NAS TRANSPORT"] = { "type" : "105" }
 
 msg_list["ACTIVATE DEFAULT EPS BEARER CONTEXT REQUEST"] = { "type" : "193" }
 msg_list["ACTIVATE DEFAULT EPS BEARER CONTEXT ACCEPT"] = { "type" : "194" }
@@ -291,7 +291,7 @@ for key in msg_list.keys():
         print("Read from " + cachefile)
     else:
         document = Document(filename)
-        f = open(cachefile, 'w') 
+        f = open(cachefile, 'w')
 
         ies = []
         write_file(f, "ies = []\n")
@@ -468,20 +468,20 @@ for (k, v) in sorted_type_list:
     elif type_list[k]["format"] == "LV-E" or type_list[k]["format"] == "TLV-E":
         f.write("int ogs_nas_eps_decode_%s(ogs_nas_%s_t *%s, ogs_pkbuf_t *pkbuf)\n" % (v_lower(k), v_lower(k), v_lower(k)))
         f.write("{\n")
-        f.write("    int size = 0;\n")
-        f.write("    ogs_nas_%s_t *source = NULL;\n\n" % v_lower(k))
-        f.write("    if (pkbuf->len < 2) {\n")
+        f.write("    size_t size = 0;\n")
+        f.write("    uint16_t len_be;\n\n")
+        f.write("    if (pkbuf->len < sizeof(uint16_t)) {\n")
         f.write("       ogs_error(\"Not enough pkbuf [len:%d]\", pkbuf->len);\n")
         f.write("       return -1;\n")
         f.write("    }\n\n")
-        f.write("    source = (ogs_nas_%s_t *)pkbuf->data;\n\n" % v_lower(k))
-        f.write("    %s->length = be16toh(source->length);\n" % v_lower(k))
-        f.write("    size = %s->length + sizeof(%s->length);\n\n" % (v_lower(k), v_lower(k)))
+        f.write("    memcpy(&len_be, pkbuf->data, sizeof(uint16_t));\n")
+        f.write("    %s->length = be16toh(len_be);\n" % v_lower(k))
+        f.write("    %s->buffer = pkbuf->data + sizeof(uint16_t);\n\n" % (v_lower(k)))
+        f.write("    size = sizeof(uint16_t) + %s->length;\n" % (v_lower(k)))
         f.write("    if (ogs_pkbuf_pull(pkbuf, size) == NULL) {\n")
-        f.write("       ogs_error(\"ogs_pkbuf_pull() failed [size:%d]\", (int)size);\n")
+        f.write("       ogs_error(\"ogs_pkbuf_pull() failed [size:%zu]\", size);\n")
         f.write("       return -1;\n")
         f.write("    }\n\n")
-        f.write("    %s->buffer = pkbuf->data - size + sizeof(%s->length);\n\n" % (v_lower(k), v_lower(k)))
         f.write("    ogs_trace(\"  %s - \");\n" % v_upper(k))
         f.write("    ogs_log_hexdump(OGS_LOG_TRACE, (void*)%s->buffer, %s->length);\n\n" % (v_lower(k), v_lower(k)));
         f.write("    return size;\n")
@@ -507,19 +507,20 @@ for (k, v) in sorted_type_list:
         f.write("int ogs_nas_eps_decode_%s(ogs_nas_%s_t *%s, ogs_pkbuf_t *pkbuf)\n" % (v_lower(k), v_lower(k), v_lower(k)))
         f.write("{\n")
         f.write("    int size = 0;\n")
-        f.write("    ogs_nas_%s_t *source = NULL;\n\n" % v_lower(k))
-        f.write("    if (pkbuf->len < 1) {\n")
+        f.write("    if (pkbuf->len < sizeof(uint8_t)) {\n")
         f.write("       ogs_error(\"Not enough pkbuf [len:%d]\", pkbuf->len);\n")
         f.write("       return -1;\n")
         f.write("    }\n\n")
-        f.write("    source = (ogs_nas_%s_t *)pkbuf->data;\n\n" % v_lower(k))
-        f.write("    %s->length = source->length;\n" % v_lower(k))
-        f.write("    size = %s->length + sizeof(%s->length);\n\n" % (v_lower(k), v_lower(k)))
+        f.write("    %s->length = *pkbuf->data;\n" % v_lower(k))
+        f.write("    size = sizeof(uint8_t) + %s->length;\n\n" % v_lower(k))
         f.write("    if (ogs_pkbuf_pull(pkbuf, size) == NULL) {\n")
         f.write("       ogs_error(\"ogs_pkbuf_pull() failed [size:%d]\", (int)size);\n")
         f.write("       return -1;\n")
         f.write("    }\n\n")
-        f.write("    if (sizeof(*%s) < size) return -1;\n" % v_lower(k))
+        f.write("    if (sizeof(*%s) < size) {\n" % v_lower(k))
+        f.write("        ogs_error(\"IE size too big [size:%d]\", (int)size);\n")
+        f.write("        return -1;\n")
+        f.write("    }\n\n")
         f.write("    memcpy(%s, pkbuf->data - size, size);\n\n" % v_lower(k))
         if "decode" in type_list[k]:
             f.write("%s" % type_list[k]["decode"])
@@ -531,6 +532,10 @@ for (k, v) in sorted_type_list:
         f.write("{\n")
         f.write("    int size = %s->length + sizeof(%s->length);\n" % (v_lower(k), v_lower(k)))
         f.write("    ogs_nas_%s_t target;\n\n" % v_lower(k))
+        f.write("    if (sizeof(ogs_nas_%s_t) < size) {\n" % v_lower(k))
+        f.write("       ogs_error(\"%s too long [size:%%d]\", (int)size);\n" % v_upper(k))
+        f.write("       return -1;\n")
+        f.write("    }\n\n")
         f.write("    memcpy(&target, %s, sizeof(ogs_nas_%s_t));\n" % (v_lower(k), v_lower(k)))
         if "encode" in type_list[k]:
             f.write("%s" % type_list[k]["encode"])
@@ -748,6 +753,14 @@ for (k, v) in sorted_msg_list:
     if [ies for ies in msg_list[k]["ies"] if ies["presence"] != "M"]:
         f.write("""        default:
             ogs_warn("Unknown type(0x%x) or not implemented\\n", type);
+            size = ogs_nas_skip_unknown_ie(type, pkbuf,
+                    OGS_NAS_EPS_TLV_E_IEI_MIN);
+            if (size < 0) {
+               ogs_error("ogs_nas_skip_unknown_ie() failed");
+               return size;
+            }
+
+            decoded += size;
             break;
         }
     }
@@ -781,7 +794,10 @@ f.write("""int ogs_nas_emm_decode(ogs_nas_eps_message_t *message, ogs_pkbuf_t *p
         ogs_assert(ogs_pkbuf_push(pkbuf, 1));
         decoded -= 1;
         size = ogs_nas_eps_decode_service_request(message, pkbuf);
-        ogs_assert(size >= 0);
+        if (size < 0) {
+            ogs_error("ogs_nas_eps_decode_service_request() failed");
+            return OGS_ERROR;
+        }
         decoded += size;
 
         goto out;
@@ -797,14 +813,14 @@ for (k, v) in sorted_msg_list:
         if len(msg_list[k]["ies"]) != 0:
             f.write("        size = ogs_nas_eps_decode_%s(message, pkbuf);\n" % v_lower(k))
             f.write("        if (size < 0) {\n")
-            f.write("           ogs_error(\"ogs_nas_5gs_decode_%s() failed\");\n" % v_lower(k))
-            f.write("           return size;\n")
+            f.write("           ogs_error(\"ogs_nas_eps_decode_%s() failed\");\n" % v_lower(k))
+            f.write("           return OGS_ERROR;\n")
             f.write("        }\n\n")
             f.write("        decoded += size;\n")
         f.write("        break;\n")
 
 f.write("""    default:
-        ogs_error("Unknown message type (0x%x) or not implemented", 
+        ogs_error("Unknown message type (0x%x) or not implemented",
                 message->emm.h.message_type);
         break;
     }
@@ -844,14 +860,14 @@ for (k, v) in sorted_msg_list:
         if len(msg_list[k]["ies"]) != 0:
             f.write("        size = ogs_nas_eps_decode_%s(message, pkbuf);\n" % v_lower(k))
             f.write("        if (size < 0) {\n")
-            f.write("           ogs_error(\"ogs_nas_5gs_decode_%s() failed\");\n" % v_lower(k))
-            f.write("           return size;\n")
+            f.write("           ogs_error(\"ogs_nas_eps_decode_%s() failed\");\n" % v_lower(k))
+            f.write("           return OGS_ERROR;\n")
             f.write("        }\n\n")
             f.write("        decoded += size;\n")
         f.write("        break;\n")
 
 f.write("""    default:
-        ogs_error("Unknown message type (0x%x) or not implemented", 
+        ogs_error("Unknown message type (0x%x) or not implemented",
                message->esm.h.message_type);
         break;
     }
@@ -969,7 +985,7 @@ for (k, v) in sorted_msg_list:
         f.write("        break;\n")
 
 f.write("""    default:
-        ogs_error("Unknown message type (0x%x) or not implemented", 
+        ogs_error("Unknown message type (0x%x) or not implemented",
                message->emm.h.message_type);
         ogs_pkbuf_free(pkbuf);
         return NULL;
@@ -1023,7 +1039,7 @@ for (k, v) in sorted_msg_list:
         f.write("        break;\n")
 
 f.write("""   default:
-        ogs_error("Unknown message type (0x%x) or not implemented", 
+        ogs_error("Unknown message type (0x%x) or not implemented",
                 message->esm.h.message_type);
         ogs_pkbuf_free(pkbuf);
         return NULL;
@@ -1042,10 +1058,10 @@ ogs_pkbuf_t *ogs_nas_eps_plain_encode(ogs_nas_eps_message_t *message)
     ogs_assert(message->emm.h.protocol_discriminator ==
             message->esm.h.protocol_discriminator);
 
-    if (message->emm.h.protocol_discriminator == 
+    if (message->emm.h.protocol_discriminator ==
             OGS_NAS_PROTOCOL_DISCRIMINATOR_EMM)
         return ogs_nas_emm_encode(message);
-    else if (message->emm.h.protocol_discriminator == 
+    else if (message->emm.h.protocol_discriminator ==
             OGS_NAS_PROTOCOL_DISCRIMINATOR_ESM)
         return ogs_nas_esm_encode(message);
 

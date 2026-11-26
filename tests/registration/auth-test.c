@@ -22,6 +22,7 @@
 static void test1_func(abts_case *tc, void *data)
 {
     int rv;
+    uint8_t active_ksi;
     ogs_socknode_t *ngap;
     ogs_socknode_t *gtpu;
     ogs_pkbuf_t *gmmbuf;
@@ -138,6 +139,9 @@ static void test1_func(abts_case *tc, void *data)
     ABTS_PTR_NOTNULL(tc, recvbuf);
     testngap_recv(test_ue, recvbuf);
 
+    /* Preserve this active KSI across the failed authentication attempts. */
+    active_ksi = test_ue->nas.ksi;
+
     /* Send Security mode complete */
     gmmbuf = testgmm_build_security_mode_complete(test_ue, nasbuf);
     ABTS_PTR_NOTNULL(tc, gmmbuf);
@@ -247,14 +251,6 @@ static void test1_func(abts_case *tc, void *data)
     gmmbuf = testgmm_build_registration_request(test_ue, NULL, false, false);
     ABTS_PTR_NOTNULL(tc, gmmbuf);
 
-    test_ue->registration_request_param.gmm_capability = 1;
-    test_ue->registration_request_param.s1_ue_network_capability = 1;
-    test_ue->registration_request_param.requested_nssai = 1;
-    test_ue->registration_request_param.last_visited_registered_tai = 1;
-    test_ue->registration_request_param.ue_usage_setting = 1;
-    nasbuf = testgmm_build_registration_request(test_ue, NULL, false, false);
-    ABTS_PTR_NOTNULL(tc, nasbuf);
-
     sendbuf = testngap_build_initial_ue_message(test_ue, gmmbuf,
                 NGAP_RRCEstablishmentCause_mo_Signalling, false, true);
     ABTS_PTR_NOTNULL(tc, sendbuf);
@@ -265,6 +261,7 @@ static void test1_func(abts_case *tc, void *data)
     recvbuf = testgnb_ngap_read(ngap);
     ABTS_PTR_NOTNULL(tc, recvbuf);
     testngap_recv(test_ue, recvbuf);
+    ABTS_INT_EQUAL(tc, active_ksi, test_ue->nas.ksi);
 
     /* Send Authentication failure - SYNCH failure */
     gmmbuf = testgmm_build_authentication_failure(
@@ -279,6 +276,7 @@ static void test1_func(abts_case *tc, void *data)
     recvbuf = testgnb_ngap_read(ngap);
     ABTS_PTR_NOTNULL(tc, recvbuf);
     testngap_recv(test_ue, recvbuf);
+    ABTS_INT_EQUAL(tc, active_ksi, test_ue->nas.ksi);
 
     /* Send Authentication failure - MAC failure */
     gmmbuf = testgmm_build_authentication_failure(
@@ -293,6 +291,7 @@ static void test1_func(abts_case *tc, void *data)
     recvbuf = testgnb_ngap_read(ngap);
     ABTS_PTR_NOTNULL(tc, recvbuf);
     testngap_recv(test_ue, recvbuf);
+    ABTS_INT_EQUAL(tc, active_ksi, test_ue->nas.ksi);
 
     /* Send De-registration request */
     gmmbuf = testgmm_build_de_registration_request(test_ue, 1, true, true);

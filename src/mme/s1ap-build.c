@@ -163,7 +163,8 @@ ogs_pkbuf_t *s1ap_build_setup_rsp(void)
 }
 
 ogs_pkbuf_t *s1ap_build_setup_failure(
-        S1AP_Cause_PR group, long cause, long time_to_wait)
+        S1AP_Cause_PR group, long cause, long time_to_wait,
+        S1AP_CriticalityDiagnostics_t *CriticalityDiagnostics)
 {
     S1AP_S1AP_PDU_t pdu;
     S1AP_UnsuccessfulOutcome_t *unsuccessfulOutcome = NULL;
@@ -231,6 +232,18 @@ ogs_pkbuf_t *s1ap_build_setup_failure(
 
     if (TimeToWait)
         *TimeToWait = time_to_wait;
+
+    if (CriticalityDiagnostics) {
+        ie = CALLOC(1, sizeof(*ie));
+        ogs_assert(ie);
+        ASN_SEQUENCE_ADD(S1SetupFailure->protocolIEs, ie);
+
+        ie->id = S1AP_ProtocolIE_ID_id_CriticalityDiagnostics;
+        ie->criticality = S1AP_Criticality_ignore;
+        ie->value.present =
+            S1AP_S1SetupFailureIEs__value_PR_CriticalityDiagnostics;
+        ie->value.choice.CriticalityDiagnostics = CriticalityDiagnostics;
+    }
 
     return ogs_s1ap_encode(&pdu);
 }
@@ -723,6 +736,14 @@ ogs_pkbuf_t *s1ap_build_initial_context_setup_request(
                             "ENB_UE_S1AP_ID[%d] MME_UE_S1AP_ID[%d]",
                             mme_ue->imsi_bcd, mme_ue->nas_eps.type,
                             enb_ue->enb_ue_s1ap_id, enb_ue->mme_ue_s1ap_id);
+                    ogs_warn("[EBI-TRACK]     EBI[%d] ESM[%s] AGE[%lldms] "
+                            "bitmap[0x%04x]",
+                            bearer->ebi,
+                            mme_ebi_track_esm_state_name(bearer),
+                            bearer->trace_created ? (long long)
+                                ogs_time_to_msec(ogs_time_now() -
+                                    bearer->trace_created) : -1LL,
+                            mme_ue->ebi_bitmap);
                     continue;
                 }
 
@@ -1438,6 +1459,8 @@ ogs_pkbuf_t *s1ap_build_e_rab_setup_request(
     ogs_assert(nasPdu->buf);
     memcpy(nasPdu->buf, esmbuf->data, nasPdu->size);
     ogs_pkbuf_free(esmbuf);
+
+    bearer->e_rab_setup_request_pending = true;
 
     return ogs_s1ap_encode(&pdu);
 }
@@ -2327,7 +2350,7 @@ ogs_pkbuf_t *s1ap_build_path_switch_ack(
 
     if (send_ue_security_capability) {
         ie = CALLOC(1, sizeof(S1AP_PathSwitchRequestAcknowledgeIEs_t));
-        ASN_SEQUENCE_ADD(&PathSwitchRequestAcknowledge->protocolIEs, ie);
+        ASN_SEQUENCE_ADD(PathSwitchRequestAcknowledge->protocolIEs, ie);
 
         ie->id = S1AP_ProtocolIE_ID_id_UESecurityCapabilities;
         ie->criticality = S1AP_Criticality_ignore;

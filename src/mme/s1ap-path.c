@@ -132,7 +132,7 @@ int s1ap_delayed_send_to_enb_ue(
 
 int s1ap_send_to_esm(
         mme_ue_t *mme_ue, ogs_pkbuf_t *esmbuf,
-        uint8_t nas_type, int create_action)
+        uint8_t nas_type, int mac_failed, int create_action)
 {
     int rv;
     mme_event_t *e = NULL;
@@ -145,6 +145,7 @@ int s1ap_send_to_esm(
     e->mme_ue_id = mme_ue->id;
     e->pkbuf = esmbuf;
     e->nas_type = nas_type;
+    e->mac_failed = mac_failed;
     e->create_action = create_action;
     rv = ogs_queue_push(ogs_app()->queue, e);
     if (rv != OGS_OK) {
@@ -162,6 +163,7 @@ int s1ap_send_to_nas(enb_ue_t *enb_ue,
     int rv;
 
     mme_ue_t *mme_ue = NULL;
+    int mac_failed = 0;
 
     ogs_nas_eps_security_header_t *sh = NULL;
     ogs_nas_security_header_type_t security_header_type;
@@ -173,9 +175,9 @@ int s1ap_send_to_nas(enb_ue_t *enb_ue,
     ogs_assert(enb_ue);
     ogs_assert(nasPdu);
 
+    /* TS24.301 4.4.4.3, 7.2: discard the message, keep the S1 context */
     if (nasPdu->size < sizeof(ogs_nas_emm_header_t)) {
         ogs_error("NAS PDU too short [%d]", (int)nasPdu->size);
-        enb_ue_remove(enb_ue);
         return OGS_ERROR;
     }
 
@@ -218,7 +220,6 @@ int s1ap_send_to_nas(enb_ue_t *enb_ue,
         ogs_error("Not implemented(security header type:0x%x)",
                 sh->security_header_type);
         ogs_pkbuf_free(nasbuf);
-        enb_ue_remove(enb_ue);
         return OGS_ERROR;
     }
 
@@ -237,7 +238,6 @@ int s1ap_send_to_nas(enb_ue_t *enb_ue,
             ogs_error("NAS PDU too short for security header [%d]",
                     (int)nasPdu->size);
             ogs_pkbuf_free(nasbuf);
-            enb_ue_remove(enb_ue);
             return OGS_ERROR;
         }
     }
@@ -250,16 +250,19 @@ int s1ap_send_to_nas(enb_ue_t *enb_ue,
     if (nasbuf->len < sizeof(ogs_nas_emm_header_t)) {
         ogs_error("NAS PDU too short for EMM header [%d]", (int)nasbuf->len);
         ogs_pkbuf_free(nasbuf);
-        enb_ue_remove(enb_ue);
         return OGS_ERROR;
     }
 
     if (mme_ue) {
-        if (nas_eps_security_decode(mme_ue,
-                security_header_type, nasbuf) != OGS_OK) {
+        rv = nas_eps_security_decode(mme_ue, security_header_type, nasbuf);
+
+        /* The verdict goes with the message, and not with the UE */
+        mac_failed = mme_ue->mac_failed;
+        mme_ue->mac_failed = 0;
+
+        if (rv != OGS_OK) {
             ogs_error("nas_eps_security_decode failed()");
             ogs_pkbuf_free(nasbuf);
-            enb_ue_remove(enb_ue);
             return OGS_ERROR;
         }
     }
@@ -274,7 +277,6 @@ int s1ap_send_to_nas(enb_ue_t *enb_ue,
                     h->protocol_discriminator);
 
             ogs_pkbuf_free(nasbuf);
-            enb_ue_remove(enb_ue);
 
             return OGS_ERROR;
         }
@@ -289,7 +291,6 @@ int s1ap_send_to_nas(enb_ue_t *enb_ue,
             ogs_error("Invalid EMM message type [%d]", h->message_type);
 
             ogs_pkbuf_free(nasbuf);
-            enb_ue_remove(enb_ue);
 
             return OGS_ERROR;
         }
@@ -306,6 +307,7 @@ int s1ap_send_to_nas(enb_ue_t *enb_ue,
         e->enb_ue_id = enb_ue->id;
         e->s1ap_code = procedureCode;
         e->nas_type = security_header_type.type;
+        e->mac_failed = mac_failed;
         e->pkbuf = nasbuf;
         rv = ogs_queue_push(ogs_app()->queue, e);
         if (rv != OGS_OK) {
@@ -322,7 +324,7 @@ int s1ap_send_to_nas(enb_ue_t *enb_ue,
             return OGS_ERROR;
         }
         rv = s1ap_send_to_esm(
-                mme_ue, nasbuf, security_header_type.type,
+                mme_ue, nasbuf, security_header_type.type, mac_failed,
                 OGS_GTP_CREATE_IN_UPLINK_NAS_TRANSPORT);
         ogs_expect(rv == OGS_OK);
         return rv;
@@ -331,7 +333,6 @@ int s1ap_send_to_nas(enb_ue_t *enb_ue,
                   h->protocol_discriminator);
 
         ogs_pkbuf_free(nasbuf);
-        enb_ue_remove(enb_ue);
 
         return OGS_ERROR;
     }
@@ -359,7 +360,8 @@ int s1ap_send_s1_setup_response(mme_enb_t *enb)
 }
 
 int s1ap_send_s1_setup_failure(
-        mme_enb_t *enb, S1AP_Cause_PR group, long cause)
+        mme_enb_t *enb, S1AP_Cause_PR group, long cause,
+        S1AP_CriticalityDiagnostics_t *CriticalityDiagnostics)
 {
     int rv;
     ogs_pkbuf_t *s1ap_buffer;
@@ -368,7 +370,8 @@ int s1ap_send_s1_setup_failure(
 
     ogs_debug("S1-Setup failure");
 
-    s1ap_buffer = s1ap_build_setup_failure(group, cause, S1AP_TimeToWait_v10s);
+    s1ap_buffer = s1ap_build_setup_failure(
+            group, cause, S1AP_TimeToWait_v10s, CriticalityDiagnostics);
     if (!s1ap_buffer) {
         ogs_error("s1ap_build_setup_failure() failed");
         return OGS_ERROR;
@@ -680,6 +683,43 @@ int s1ap_send_path_switch_ack(
     return rv;
 }
 
+int s1ap_send_path_switch_failure(
+        mme_enb_t *enb,
+        uint32_t enb_ue_s1ap_id, uint32_t mme_ue_s1ap_id,
+        S1AP_Cause_PR group, long cause)
+{
+    int rv;
+    uint16_t stream_no;
+    ogs_pkbuf_t *s1apbuf = NULL;
+
+    ogs_assert(enb);
+
+    ogs_debug("PathSwitchFailure");
+
+    if (enb->max_num_of_ostreams < 2) {
+        ogs_error("eNB has no UE-associated SCTP stream [%d]",
+                enb->max_num_of_ostreams);
+        return OGS_NOTFOUND;
+    }
+
+    s1apbuf = s1ap_build_path_switch_failure(
+            enb_ue_s1ap_id, mme_ue_s1ap_id, group, cause);
+    if (!s1apbuf) {
+        ogs_error("s1ap_build_path_switch_failure() failed");
+        return OGS_ERROR;
+    }
+
+    /* The UE context still belongs to the source eNB, if it exists. */
+    if (enb->ostream_id >= enb->max_num_of_ostreams)
+        enb->ostream_id = 0;
+    stream_no = OGS_NEXT_ID(enb->ostream_id, 1,
+            enb->max_num_of_ostreams-1);
+    rv = s1ap_send_to_enb(enb, s1apbuf, stream_no);
+    ogs_expect(rv == OGS_OK);
+
+    return rv;
+}
+
 int s1ap_send_handover_command(enb_ue_t *source_ue)
 {
     int rv;
@@ -846,6 +886,10 @@ int s1ap_send_handover_request(
             source_totarget_transparentContainer);
     if (!s1apbuf) {
         ogs_error("s1ap_build_handover_request() failed");
+        /* Release the target enb_ue allocated above before returning,
+         * otherwise a build failure leaks the context from enb_ue_pool. */
+        enb_ue_source_deassociate_target(target_ue);
+        enb_ue_remove(target_ue);
         return OGS_ERROR;
     }
 
@@ -889,6 +933,17 @@ int s1ap_send_error_indication(
         S1AP_ENB_UE_S1AP_ID_t *enb_ue_s1ap_id,
         S1AP_Cause_PR group, long cause)
 {
+    return s1ap_send_error_indication_with_diagnostics(
+            enb, mme_ue_s1ap_id, enb_ue_s1ap_id, group, cause, NULL);
+}
+
+int s1ap_send_error_indication_with_diagnostics(
+        mme_enb_t *enb,
+        S1AP_MME_UE_S1AP_ID_t *mme_ue_s1ap_id,
+        S1AP_ENB_UE_S1AP_ID_t *enb_ue_s1ap_id,
+        S1AP_Cause_PR group, long cause,
+        S1AP_CriticalityDiagnostics_t *CriticalityDiagnostics)
+{
     int rv;
     ogs_pkbuf_t *s1apbuf = NULL;
 
@@ -897,7 +952,8 @@ int s1ap_send_error_indication(
     ogs_info("ErrorIndication");
 
     s1apbuf = ogs_s1ap_build_error_indication(
-            mme_ue_s1ap_id, enb_ue_s1ap_id, group, cause);
+            mme_ue_s1ap_id, enb_ue_s1ap_id, group, cause,
+            CriticalityDiagnostics);
     if (!s1apbuf) {
         ogs_error("ogs_s1ap_build_error_indication() failed");
         return OGS_ERROR;

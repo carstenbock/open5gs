@@ -21,6 +21,9 @@
 #include "nnrf-handler.h"
 #include "nudm-handler.h"
 
+/* TS 24.501 clause 9.12.1: 1,020 octets at most */
+#define OGS_MAX_SERVING_NETWORK_NAME_LEN 1020
+
 bool udm_nudm_ueau_handle_get(
     udm_ue_t *udm_ue, ogs_sbi_stream_t *stream, ogs_sbi_message_t *recvmsg)
 {
@@ -47,6 +50,22 @@ bool udm_nudm_ueau_handle_get(
         ogs_assert(true ==
             ogs_sbi_server_send_error(stream, OGS_SBI_HTTP_STATUS_BAD_REQUEST,
                 recvmsg, "No servingNetworkName", udm_ue->suci, NULL));
+        return false;
+    }
+    if (!AuthenticationInfoRequest->serving_network_name[0]) {
+        ogs_error("[%s] Empty servingNetworkName", udm_ue->suci);
+        ogs_assert(true ==
+            ogs_sbi_server_send_error(stream, OGS_SBI_HTTP_STATUS_BAD_REQUEST,
+                recvmsg, "Empty servingNetworkName", udm_ue->suci, NULL));
+        return false;
+    }
+    if (strlen(AuthenticationInfoRequest->serving_network_name) >
+            OGS_MAX_SERVING_NETWORK_NAME_LEN) {
+        ogs_error("[%s] Oversized servingNetworkName [%d]", udm_ue->suci,
+                (int)strlen(AuthenticationInfoRequest->serving_network_name));
+        ogs_assert(true ==
+            ogs_sbi_server_send_error(stream, OGS_SBI_HTTP_STATUS_BAD_REQUEST,
+                recvmsg, "Oversized servingNetworkName", udm_ue->suci, NULL));
         return false;
     }
 
@@ -104,12 +123,27 @@ bool udm_nudm_ueau_handle_get(
             return false;
         }
 
-        ogs_ascii_to_hex(
-            ResynchronizationInfo->rand, strlen(ResynchronizationInfo->rand),
-            rand, sizeof(rand));
-        ogs_ascii_to_hex(
-            ResynchronizationInfo->auts, strlen(ResynchronizationInfo->auts),
-            auts, sizeof(auts));
+        if (ogs_hex_from_string_checked(
+                ResynchronizationInfo->rand, rand, sizeof(rand)) != OGS_OK) {
+            ogs_error("[%s] Invalid ResynchronizationInfo.rand",
+                    udm_ue->suci);
+            ogs_assert(true ==
+                ogs_sbi_server_send_error(stream,
+                    OGS_SBI_HTTP_STATUS_BAD_REQUEST, recvmsg,
+                    "Invalid ResynchronizationInfo.rand", udm_ue->suci, NULL));
+            return false;
+        }
+
+        if (ogs_hex_from_string_checked(
+                ResynchronizationInfo->auts, auts, sizeof(auts)) != OGS_OK) {
+            ogs_error("[%s] Invalid ResynchronizationInfo.auts",
+                    udm_ue->suci);
+            ogs_assert(true ==
+                ogs_sbi_server_send_error(stream,
+                    OGS_SBI_HTTP_STATUS_BAD_REQUEST, recvmsg,
+                    "Invalid ResynchronizationInfo.auts", udm_ue->suci, NULL));
+            return false;
+        }
 
         if (memcmp(udm_ue->rand, rand, OGS_RAND_LEN) != 0) {
             ogs_error("[%s] Invalid RAND", udm_ue->suci);
@@ -200,14 +234,6 @@ bool udm_nudm_ueau_handle_result_confirmation_inform(
         return false;
     }
 
-    if (!AuthEvent->success) {
-        ogs_error("[%s] No success", udm_ue->suci);
-        ogs_assert(true ==
-            ogs_sbi_server_send_error(stream, OGS_SBI_HTTP_STATUS_BAD_REQUEST,
-                message, "No success", udm_ue->suci, NULL));
-        return false;
-    }
-
     if (!AuthEvent->time_stamp) {
         ogs_error("[%s] No timeStamp", udm_ue->suci);
         ogs_assert(true ==
@@ -229,6 +255,30 @@ bool udm_nudm_ueau_handle_result_confirmation_inform(
         ogs_assert(true ==
             ogs_sbi_server_send_error(stream, OGS_SBI_HTTP_STATUS_BAD_REQUEST,
                 message, "No servingNetworkName", udm_ue->suci, NULL));
+        return false;
+    }
+
+    if (!strcmp(message->h.method, OGS_SBI_HTTP_METHOD_POST)) {
+        if (message->h.resource.component[2] ||
+            AuthEvent->auth_removal_ind) {
+            ogs_error("[%s] Invalid authentication confirmation", udm_ue->suci);
+            ogs_assert(true == ogs_sbi_server_send_error(stream,
+                OGS_SBI_HTTP_STATUS_BAD_REQUEST, message,
+                "Invalid authentication confirmation", udm_ue->suci, NULL));
+            return false;
+        }
+    } else if (!strcmp(message->h.method, OGS_SBI_HTTP_METHOD_PUT)) {
+        if (!AuthEvent->auth_removal_ind || AuthEvent->success) {
+            ogs_error("[%s] Invalid authentication removal", udm_ue->suci);
+            ogs_assert(true == ogs_sbi_server_send_error(stream,
+                OGS_SBI_HTTP_STATUS_BAD_REQUEST, message,
+                "Invalid authentication removal", udm_ue->suci, NULL));
+            return false;
+        }
+    } else {
+        ogs_assert(true == ogs_sbi_server_send_error(stream,
+            OGS_SBI_HTTP_STATUS_METHOD_NOT_ALLOWED, message,
+            "Invalid HTTP method", message->h.method, NULL));
         return false;
     }
 
@@ -330,13 +380,19 @@ bool udm_nudm_uecm_handle_amf_registration(
         return false;
     }
 
+    if (!ogs_sbi_parse_guami(&udm_ue->guami, Guami)) {
+        ogs_error("[%s] Invalid GUAMI", udm_ue->supi);
+        ogs_assert(true ==
+            ogs_sbi_server_send_error(stream, OGS_SBI_HTTP_STATUS_BAD_REQUEST,
+                message, "Invalid GUAMI", udm_ue->supi, NULL));
+        return false;
+    }
+
     if (udm_ue->dereg_callback_uri)
         ogs_free(udm_ue->dereg_callback_uri);
     udm_ue->dereg_callback_uri = ogs_strdup(
             Amf3GppAccessRegistration->dereg_callback_uri);
     ogs_assert(udm_ue->dereg_callback_uri);
-
-    ogs_sbi_parse_guami(&udm_ue->guami, Guami);
 
     udm_ue->rat_type = Amf3GppAccessRegistration->rat_type;
 
@@ -434,7 +490,13 @@ bool udm_nudm_uecm_handle_amf_registration_update(
      * GUAMI. If so, the UDM shall set the PurgeFlag. The UDM responds with
      * "204 No Content".
      * 2b. Otherwise the UDM responds with "403 Forbidden". */
-    ogs_sbi_parse_guami(&recv_guami, Guami);
+    if (!ogs_sbi_parse_guami(&recv_guami, Guami)) {
+        ogs_error("[%s] Invalid GUAMI", udm_ue->supi);
+        ogs_assert(true ==
+            ogs_sbi_server_send_error(stream, OGS_SBI_HTTP_STATUS_BAD_REQUEST,
+                message, "Invalid GUAMI", udm_ue->supi, NULL));
+        return false;
+    }
     if (memcmp(&recv_guami, &udm_ue->guami, sizeof(recv_guami)) != 0) {
         ogs_error("[%s] Guami mismatch", udm_ue->supi);
         /*
@@ -559,11 +621,12 @@ bool udm_nudm_uecm_handle_smf_registration(
         return false;
     }
 
-    if (!SmfRegistration->pdu_session_id) {
-        ogs_error("[%s:%d] No pduSessionId", udm_ue->supi, sess->psi);
+    if (SmfRegistration->pdu_session_id != sess->psi) {
+        ogs_error("[%s:%d] pduSessionId mismatch [%d]",
+                udm_ue->supi, sess->psi, SmfRegistration->pdu_session_id);
         ogs_assert(true ==
             ogs_sbi_server_send_error(stream, OGS_SBI_HTTP_STATUS_BAD_REQUEST,
-                message, "No pduSessionId", udm_ue->supi, NULL));
+                message, "pduSessionId mismatch", udm_ue->supi, NULL));
         return false;
     }
 
@@ -600,6 +663,8 @@ bool udm_nudm_uecm_handle_smf_registration(
             UDM_SBI_NO_STATE, NULL);
     ogs_expect(r == OGS_OK);
     ogs_assert(r != OGS_ERROR);
+    if (r == OGS_OK)
+        sess->smf_registered = true;
 
     return true;
 }
@@ -622,6 +687,14 @@ bool udm_nudm_uecm_handle_smf_deregistration(
             UDM_SBI_NO_STATE, NULL);
     ogs_expect(r == OGS_OK);
     ogs_assert(r != OGS_ERROR);
+    /*
+     * Record the DELETE when submitted. A new PUT for the same PSI may
+     * arrive before the UDR replies to this DELETE. Its registration must
+     * survive the older DELETE response. Keep the cached PUT body as well:
+     * a pending PUT response reads it from the session.
+     */
+    if (r == OGS_OK)
+        sess->smf_registered = false;
 
     return true;
 }

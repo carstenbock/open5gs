@@ -195,6 +195,12 @@ int16_t ogs_pfcp_parse_sdf_filter(
         filter->flow_description_len = be16toh(filter->flow_description_len);
         size += sizeof(filter->flow_description_len);
 
+        if (size + filter->flow_description_len > octet->len) {
+            ogs_error("size[%d]+filter->flow_description_len[%d] "
+                    "> IE Length[%d]",
+                    size, filter->flow_description_len, octet->len);
+            return 0;
+        }
         filter->flow_description = (char *)octet->data + size;
         size += filter->flow_description_len;
     }
@@ -332,6 +338,57 @@ int16_t ogs_pfcp_parse_bitrate(
     return size;
 }
 
+/*
+ * 8.2.37 F-SEID in TS 29.244
+ *
+ * The flags octet and the 8-octet SEID are followed by the IPv4 address
+ * if V4 is set and by the IPv6 address if V6 is set, so a well-formed IE
+ * is 13, 25 or 29 octets. The IE is carried as a variable-length octet
+ * string, so decode it into a zeroed structure and refuse an IE that is
+ * shorter than the fields its own flags announce. Callers must not alias
+ * the IE: the SEID is byte-swapped in the decoded copy, not in place.
+ */
+int16_t ogs_pfcp_parse_f_seid(
+        ogs_pfcp_f_seid_t *f_seid, ogs_tlv_octet_t *octet)
+{
+    uint32_t size = 1 + sizeof(f_seid->seid);
+
+    ogs_assert(f_seid);
+    ogs_assert(octet);
+
+    memset(f_seid, 0, sizeof(*f_seid));
+
+    if (!octet->data || octet->len < size) {
+        ogs_error("Invalid F-SEID [data:%p,len:%d]",
+                octet->data, octet->len);
+        return 0;
+    }
+
+    memcpy(f_seid, octet->data, ogs_min(octet->len, sizeof(*f_seid)));
+
+    if (f_seid->ipv4 == 0 && f_seid->ipv6 == 0) {
+        ogs_error("No IPv4 or IPv6 in F-SEID");
+        memset(f_seid, 0, sizeof(*f_seid));
+        return 0;
+    }
+
+    if (f_seid->ipv4)
+        size += OGS_IPV4_LEN;
+    if (f_seid->ipv6)
+        size += OGS_IPV6_LEN;
+
+    if (octet->len < size) {
+        ogs_error("Truncated F-SEID [len:%d,required:%d]",
+                octet->len, size);
+        memset(f_seid, 0, sizeof(*f_seid));
+        return 0;
+    }
+
+    f_seid->seid = be64toh(f_seid->seid);
+
+    return size;
+}
+
 int16_t ogs_pfcp_build_volume(ogs_tlv_octet_t *octet,
         ogs_pfcp_volume_threshold_t *volume, void *data, int data_len)
 {
@@ -394,6 +451,11 @@ int16_t ogs_pfcp_parse_volume(
 
     memset(volume, 0, sizeof(ogs_pfcp_volume_threshold_t));
 
+    if (size + sizeof(volume->flags) > octet->len) {
+        ogs_error("size[%d]+sizeof(volume->flags)[%d] > IE Length[%d]",
+                size, (int)sizeof(volume->flags), octet->len);
+        return 0;
+    }
     volume->flags = ((unsigned char *)octet->data)[size];
     size += sizeof(volume->flags);
 
@@ -492,10 +554,22 @@ int16_t ogs_pfcp_parse_dropped_dl_traffic_threshold(
 
     memset(threshold, 0, sizeof(ogs_pfcp_dropped_dl_traffic_threshold_t));
 
+    if (size + sizeof(threshold->flags) > octet->len) {
+        ogs_error("size[%d]+sizeof(threshold->flags)[%d] > IE Length[%d]",
+                size, (int)sizeof(threshold->flags), octet->len);
+        return 0;
+    }
     threshold->flags = ((unsigned char *)octet->data)[size];
     size += sizeof(threshold->flags);
 
     if (threshold->dlpa) {
+        if (size + sizeof(threshold->downlink_packets) > octet->len) {
+            ogs_error("size[%d]+sizeof(threshold->downlink_packets)[%d] "
+                    "> IE Length[%d]",
+                    size, (int)sizeof(threshold->downlink_packets),
+                    octet->len);
+            return 0;
+        }
         memcpy(&threshold->downlink_packets,
                 (unsigned char *)octet->data + size,
                 sizeof(threshold->downlink_packets));
@@ -503,6 +577,16 @@ int16_t ogs_pfcp_parse_dropped_dl_traffic_threshold(
         size += sizeof(threshold->downlink_packets);
     }
     if (threshold->dlby) {
+        if (size + sizeof(threshold->number_of_bytes_of_downlink_data) >
+                octet->len) {
+            ogs_error("size[%d]+"
+                    "sizeof(threshold->number_of_bytes_of_downlink_data)[%d] "
+                    "> IE Length[%d]",
+                    size,
+                    (int)sizeof(threshold->number_of_bytes_of_downlink_data),
+                    octet->len);
+            return 0;
+        }
         memcpy(&threshold->number_of_bytes_of_downlink_data,
                 (unsigned char *)octet->data + size,
                 sizeof(threshold->number_of_bytes_of_downlink_data));
@@ -588,40 +672,81 @@ int16_t ogs_pfcp_parse_volume_measurement(
 
     memset(volume, 0, sizeof(ogs_pfcp_volume_measurement_t));
 
+    if (size + sizeof(volume->flags) > octet->len) {
+        ogs_error("size[%d]+sizeof(volume->flags)[%d] > IE Length[%d]",
+                size, (int)sizeof(volume->flags), octet->len);
+        return 0;
+    }
     volume->flags = ((unsigned char *)octet->data)[size];
     size += sizeof(volume->flags);
 
     if (volume->tovol) {
+        if (size + sizeof(volume->total_volume) > octet->len) {
+            ogs_error("size[%d]+sizeof(volume->total_volume)[%d] "
+                    "> IE Length[%d]",
+                    size, (int)sizeof(volume->total_volume), octet->len);
+            return 0;
+        }
         memcpy(&volume->total_volume, (unsigned char *)octet->data + size,
                 sizeof(volume->total_volume));
         volume->total_volume = be64toh(volume->total_volume);
         size += sizeof(volume->total_volume);
     }
     if (volume->ulvol) {
+        if (size + sizeof(volume->uplink_volume) > octet->len) {
+            ogs_error("size[%d]+sizeof(volume->uplink_volume)[%d] "
+                    "> IE Length[%d]",
+                    size, (int)sizeof(volume->uplink_volume), octet->len);
+            return 0;
+        }
         memcpy(&volume->uplink_volume, (unsigned char *)octet->data + size,
                 sizeof(volume->uplink_volume));
         volume->uplink_volume = be64toh(volume->uplink_volume);
         size += sizeof(volume->uplink_volume);
     }
     if (volume->dlvol) {
+        if (size + sizeof(volume->downlink_volume) > octet->len) {
+            ogs_error("size[%d]+sizeof(volume->downlink_volume)[%d] "
+                    "> IE Length[%d]",
+                    size, (int)sizeof(volume->downlink_volume), octet->len);
+            return 0;
+        }
         memcpy(&volume->downlink_volume, (unsigned char *)octet->data + size,
                 sizeof(volume->downlink_volume));
         volume->downlink_volume = be64toh(volume->downlink_volume);
         size += sizeof(volume->downlink_volume);
     }
     if (volume->tonop) {
+        if (size + sizeof(volume->total_n_packets) > octet->len) {
+            ogs_error("size[%d]+sizeof(volume->total_n_packets)[%d] "
+                    "> IE Length[%d]",
+                    size, (int)sizeof(volume->total_n_packets), octet->len);
+            return 0;
+        }
         memcpy(&volume->total_n_packets, (unsigned char *)octet->data + size,
                 sizeof(volume->total_n_packets));
         volume->total_n_packets = be64toh(volume->total_n_packets);
         size += sizeof(volume->total_n_packets);
     }
     if (volume->ulnop) {
+        if (size + sizeof(volume->uplink_n_packets) > octet->len) {
+            ogs_error("size[%d]+sizeof(volume->uplink_n_packets)[%d] "
+                    "> IE Length[%d]",
+                    size, (int)sizeof(volume->uplink_n_packets), octet->len);
+            return 0;
+        }
         memcpy(&volume->uplink_n_packets, (unsigned char *)octet->data + size,
                 sizeof(volume->uplink_n_packets));
         volume->uplink_n_packets = be64toh(volume->uplink_n_packets);
         size += sizeof(volume->uplink_n_packets);
     }
     if (volume->dlnop) {
+        if (size + sizeof(volume->downlink_n_packets) > octet->len) {
+            ogs_error("size[%d]+sizeof(volume->downlink_n_packets)[%d] "
+                    "> IE Length[%d]",
+                    size, (int)sizeof(volume->downlink_n_packets), octet->len);
+            return 0;
+        }
         memcpy(&volume->downlink_n_packets, (unsigned char *)octet->data + size,
                 sizeof(volume->downlink_n_packets));
         volume->downlink_n_packets = be64toh(volume->downlink_n_packets);

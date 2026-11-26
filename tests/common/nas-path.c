@@ -37,6 +37,8 @@ void testgmm_recv(test_ue_t *test_ue, ogs_pkbuf_t *pkbuf)
                 &message.gmm.registration_request);
         break;
     case OGS_NAS_5GS_REGISTRATION_REJECT:
+        test_ue->registration_reject_cause =
+            message.gmm.registration_reject.gmm_cause;
         break;
     case OGS_NAS_5GS_SERVICE_ACCEPT:
         testgmm_handle_service_accept(test_ue, &message.gmm.service_accept);
@@ -52,6 +54,7 @@ void testgmm_recv(test_ue_t *test_ue, ogs_pkbuf_t *pkbuf)
                 &message.gmm.authentication_request);
         break;
     case OGS_NAS_5GS_AUTHENTICATION_REJECT:
+    case OGS_NAS_5GS_DEREGISTRATION_ACCEPT_FROM_UE:
         break;
     case OGS_NAS_5GS_SECURITY_MODE_COMMAND:
         break;
@@ -152,12 +155,16 @@ void testemm_recv(test_ue_t *test_ue, ogs_pkbuf_t *pkbuf)
         break;
     case OGS_NAS_EPS_AUTHENTICATION_REJECT:
         break;
+    case OGS_NAS_EPS_DETACH_ACCEPT:
+        break;
     case OGS_NAS_EPS_SECURITY_MODE_COMMAND:
         break;
     case OGS_NAS_EPS_ATTACH_ACCEPT:
         testemm_handle_attach_accept(test_ue, &message.emm.attach_accept);
         break;
     case OGS_NAS_EPS_ATTACH_REJECT:
+        test_ue->attach_reject_cause =
+            message.emm.attach_reject.emm_cause;
         break;
     case OGS_NAS_EPS_SERVICE_REJECT:
         break;

@@ -106,7 +106,7 @@ int ogs_filter_ip_version(ogs_sockaddr_t **addr,
     ogs_inet_ntop(__aDDR, __bUF, OGS_ADDRSTRLEN)
 #define OGS_PORT(__aDDR) \
     be16toh((__aDDR)->ogs_sin_port)
-const char *ogs_inet_ntop(void *sa, char *buf, int buflen);
+const char *ogs_inet_ntop(const void *sa, char *buf, int buflen);
 int ogs_inet_pton(int family, const char *src, void *sa);
 
 socklen_t ogs_sockaddr_len(const void *sa);
@@ -120,9 +120,9 @@ bool ogs_sockaddr_check_any_match(
 int ogs_ipsubnet(ogs_ipsubnet_t *ipsub,
         const char *ipstr, const char *mask_or_numbits);
 
-char *ogs_gethostname(ogs_sockaddr_t *addr);
-char *ogs_ipstrdup(ogs_sockaddr_t *addr);
-char *ogs_sockaddr_to_string_static(ogs_sockaddr_t *sa_list);
+char *ogs_gethostname(const ogs_sockaddr_t *addr);
+char *ogs_ipstrdup(const ogs_sockaddr_t *addr);
+char *ogs_sockaddr_to_string_static(const ogs_sockaddr_t *sa_list);
 int ogs_sockaddr_from_ip_or_fqdn(ogs_sockaddr_t **sa_list,
         int family, const char *ip_or_fqdn, uint16_t port);
 

@@ -58,7 +58,8 @@ void nrf_nf_state_initial(ogs_fsm_t *s, nrf_event_t *e)
     ogs_assert(nf_instance);
 
     nf_instance->t_no_heartbeat = ogs_timer_add(ogs_app()->timer_mgr,
-            nrf_timer_nf_instance_no_heartbeat, nf_instance);
+            nrf_timer_nf_instance_no_heartbeat,
+            OGS_UINT_TO_POINTER(nf_instance->pool_id));
     ogs_assert(nf_instance->t_no_heartbeat);
 
     OGS_FSM_TRAN(s, &nrf_nf_state_will_register);
@@ -215,7 +216,7 @@ void nrf_nf_state_registered(ogs_fsm_t *s, nrf_event_t *e)
                         no_heartbeat_margin));
         }
 
-        ogs_assert(true ==
+        ogs_expect(true ==
             nrf_nnrf_nfm_send_nf_status_notify_all(
                 OpenAPI_notification_event_type_NF_REGISTERED, nf_instance));
         break;
@@ -226,7 +227,7 @@ void nrf_nf_state_registered(ogs_fsm_t *s, nrf_event_t *e)
             ogs_timer_stop(nf_instance->t_no_heartbeat);
         }
 
-        ogs_assert(true ==
+        ogs_expect(true ==
             nrf_nnrf_nfm_send_nf_status_notify_all(
                 OpenAPI_notification_event_type_NF_DEREGISTERED, nf_instance));
         break;

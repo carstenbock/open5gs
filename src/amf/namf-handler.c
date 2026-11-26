@@ -69,11 +69,17 @@ int amf_namf_comm_handle_n1_n2_message_transfer(
         ogs_error("No PDU Session Identity");
         return OGS_ERROR;
     }
+    if (ogs_pdu_session_id_is_valid(
+            N1N2MessageTransferReqData->pdu_session_id) == false) {
+        ogs_error("Invalid PDU Session Identity [%d]",
+                N1N2MessageTransferReqData->pdu_session_id);
+        return OGS_ERROR;
+    }
     pdu_session_id = N1N2MessageTransferReqData->pdu_session_id;
 
     supi = recvmsg->h.resource.component[1];
-    if (!supi) {
-        ogs_error("No SUPI");
+    if (ogs_supi_is_valid(supi) == false) {
+        ogs_error("Invalid SUPI");
         return OGS_ERROR;
     }
 
@@ -104,13 +110,6 @@ int amf_namf_comm_handle_n1_n2_message_transfer(
             ogs_error("[%s] No N1 SM Content", amf_ue->supi);
             return OGS_ERROR;
         }
-
-        /*
-         * NOTE : The pkbuf created in the SBI message will be removed
-         *        from ogs_sbi_message_free(), so it must be copied.
-         */
-        n1buf = ogs_pkbuf_copy(n1buf);
-        ogs_assert(n1buf);
     }
 
     n2InfoContainer = N1N2MessageTransferReqData->n2_info_container;
@@ -128,6 +127,10 @@ int amf_namf_comm_handle_n1_n2_message_transfer(
         }
 
         ngapIeType = n2InfoContent->ngap_ie_type;
+        if (!ngapIeType) {
+            ogs_error("[%s] Missing NGAP IE type", amf_ue->supi);
+            return OGS_ERROR;
+        }
 
         ngapData = n2InfoContent->ngap_data;
         if (!ngapData || !ngapData->content_id) {
@@ -147,6 +150,15 @@ int amf_namf_comm_handle_n1_n2_message_transfer(
          */
         n2buf = ogs_pkbuf_copy(n2buf);
         ogs_assert(n2buf);
+    }
+
+    if (n1buf) {
+        /*
+         * NOTE : The pkbuf created in the SBI message will be removed
+         *        from ogs_sbi_message_free(), so it must be copied.
+         */
+        n1buf = ogs_pkbuf_copy(n1buf);
+        ogs_assert(n1buf);
     }
 
     memset(&sendmsg, 0, sizeof(sendmsg));
@@ -389,12 +401,43 @@ int amf_namf_comm_handle_n1_n2_message_transfer(
 
         break;
 
-    case OpenAPI_ngap_ie_type_PDU_RES_REL_CMD:
-        if (!n2buf) {
-            ogs_error("[%s] No N2 SM Content", amf_ue->supi);
+    case OpenAPI_ngap_ie_type_NULL: {
+        uint8_t type;
+
+        if (!n1buf) {
+            ogs_error("[%s] No N1 SM Content", amf_ue->supi);
             return OGS_ERROR;
         }
 
+        type = nas_5gsm_message_type(n1buf, sess->psi);
+        if (n1MessageContainer->n1_message_class != OpenAPI_n1_message_class_SM ||
+            (type != OGS_NAS_5GS_PDU_SESSION_ESTABLISHMENT_REJECT &&
+             type != OGS_NAS_5GS_PDU_SESSION_RELEASE_COMMAND)) {
+            ogs_error("[%s:%d] Unexpected N1-only message [%d]",
+                    amf_ue->supi, sess->psi, type);
+            ogs_pkbuf_free(n1buf);
+            return OGS_ERROR;
+        }
+
+        if (type == OGS_NAS_5GS_PDU_SESSION_ESTABLISHMENT_REJECT) {
+            ogs_error("[%d:%d] PDU session establishment reject",
+                    sess->psi, sess->pti);
+
+            ran_ue = ran_ue_find_by_id(sess->ran_ue_id);
+            if (ran_ue) {
+                r = nas_5gs_send_gsm_reject(ran_ue, sess,
+                        OGS_NAS_PAYLOAD_CONTAINER_N1_SM_INFORMATION, n1buf);
+                ogs_expect(r == OGS_OK);
+                ogs_assert(r != OGS_ERROR);
+            } else {
+                ogs_pkbuf_free(n1buf);
+            }
+            amf_sess_remove(sess);
+            break;
+        }
+    }
+        OGS_GNUC_FALLTHROUGH;
+    case OpenAPI_ngap_ie_type_PDU_RES_REL_CMD:
         if (CM_IDLE(amf_ue)) {
             if (N1N2MessageTransferReqData->is_skip_ind == true &&
                 N1N2MessageTransferReqData->skip_ind == true) {
@@ -464,37 +507,6 @@ int amf_namf_comm_handle_n1_n2_message_transfer(
         }
         break;
 
-    case OpenAPI_ngap_ie_type_NULL:
-        /*
-         * No n2InfoContainer. According to TS23.502, this means that SMF has
-         * encountered an error and is rejecting the session.
-         *
-         * TS23.502
-         * 6.3.1.7 4.3.2.2 UE Requested PDU Session Establishment
-         * p100
-         * 11.  ...
-         * If the PDU session establishment failed anywhere between step 5
-         * and step 11, then the Namf_Communication_N1N2MessageTransfer
-         * request shall include the N1 SM container with a PDU Session
-         * Establishment Reject message ...
-         */
-        if (!n1buf) {
-            ogs_error("[%s] No N1 SM Content", amf_ue->supi);
-            return OGS_ERROR;
-        }
-
-        ogs_error("[%d:%d] PDU session establishment reject",
-                sess->psi, sess->pti);
-
-        r = nas_5gs_send_gsm_reject(
-                ran_ue_find_by_id(sess->ran_ue_id), sess,
-                OGS_NAS_PAYLOAD_CONTAINER_N1_SM_INFORMATION, n1buf);
-        ogs_expect(r == OGS_OK);
-        ogs_assert(r != OGS_ERROR);
-
-        amf_sess_remove(sess);
-        break;
-
     default:
         ogs_error("Unsupported ngapIeType[%d]", ngapIeType);
         status = OGS_SBI_HTTP_STATUS_BAD_REQUEST;
@@ -519,7 +531,7 @@ int amf_namf_callback_handle_sm_context_status(
     amf_ue_t *amf_ue = NULL;
     amf_sess_t *sess = NULL;
 
-    uint8_t pdu_session_identity;
+    int pdu_session_identity;
 
     ogs_sbi_message_t sendmsg;
     ogs_sbi_response_t *response = NULL;
@@ -530,9 +542,9 @@ int amf_namf_callback_handle_sm_context_status(
     ogs_assert(stream);
     ogs_assert(recvmsg);
 
-    if (!recvmsg->h.resource.component[0]) {
+    if (ogs_supi_is_valid(recvmsg->h.resource.component[0]) == false) {
         status = OGS_SBI_HTTP_STATUS_BAD_REQUEST;
-        ogs_error("No SUPI");
+        ogs_error("Invalid SUPI");
         goto cleanup;
     }
 
@@ -549,10 +561,12 @@ int amf_namf_callback_handle_sm_context_status(
         goto cleanup;
     }
 
-    pdu_session_identity = atoi(recvmsg->h.resource.component[2]);
-    if (pdu_session_identity == OGS_NAS_PDU_SESSION_IDENTITY_UNASSIGNED) {
+    pdu_session_identity = ogs_pdu_session_id_from_string(
+            recvmsg->h.resource.component[2]);
+    if (ogs_pdu_session_id_is_valid(pdu_session_identity) == false) {
         status = OGS_SBI_HTTP_STATUS_BAD_REQUEST;
-        ogs_error("[%s] PDU Session Identity is unassigned", amf_ue->supi);
+        ogs_error("[%s] Invalid PDU Session Identity [%s]",
+                amf_ue->supi, recvmsg->h.resource.component[2]);
         goto cleanup;
     }
 
@@ -631,9 +645,9 @@ int amf_namf_callback_handle_dereg_notify(
     ogs_assert(stream);
     ogs_assert(recvmsg);
 
-    if (!recvmsg->h.resource.component[0]) {
+    if (ogs_supi_is_valid(recvmsg->h.resource.component[0]) == false) {
         status = OGS_SBI_HTTP_STATUS_BAD_REQUEST;
-        ogs_error("No SUPI");
+        ogs_error("Invalid SUPI");
         goto cleanup;
     }
 
@@ -984,9 +998,9 @@ int amf_namf_callback_handle_sdm_data_change_notify(
         char *saveptr = NULL;
 
         ueid = ogs_sbi_parse_uri(item->resource_id, "/", &saveptr);
-        if (!ueid) {
+        if (ogs_supi_is_valid(ueid) == false) {
             status = OGS_SBI_HTTP_STATUS_BAD_REQUEST;
-            ogs_error("[%s] No UeId", item->resource_id);
+            ogs_error("[%s] Invalid SUPI", item->resource_id);
             goto cleanup;
         }
 
@@ -1129,10 +1143,6 @@ int amf_namf_comm_handle_ue_context_transfer_request(
     OpenAPI_pdu_session_context_t *PduSessionContext = NULL;
     OpenAPI_lnode_t *node = NULL;
     OpenAPI_ue_context_t UeContext;
-    OpenAPI_seaf_data_t SeafData;
-    OpenAPI_ng_ksi_t Ng_ksi;
-    OpenAPI_key_amf_t Key_amf;
-    OpenAPI_sc_type_e Tsc_type;
 
     OpenAPI_ue_context_transfer_req_data_t *UeContextTransferReqData = NULL;
     OpenAPI_ue_context_transfer_rsp_data_t UeContextTransferRspData;
@@ -1141,7 +1151,6 @@ int amf_namf_comm_handle_ue_context_transfer_request(
 
     char *encoded_gmm_capability = NULL;
     int status = OGS_SBI_HTTP_STATUS_OK;
-    char hxkamf_string[OGS_KEYSTRLEN(OGS_SHA256_DIGEST_SIZE)];
     char *strerror = NULL;
 
     ogs_assert(stream);
@@ -1208,26 +1217,12 @@ int amf_namf_comm_handle_ue_context_transfer_request(
         UeContext.sub_ue_ambr = UeAmbr;
     }
 
-    if ((amf_ue->nas.ue.ksi != 0) && (amf_ue->nas.ue.tsc != 0)) {
-        memset(&SeafData, 0, sizeof(SeafData));
-        Tsc_type = (amf_ue->nas.ue.tsc == 0) ?
-            OpenAPI_sc_type_NATIVE : OpenAPI_sc_type_MAPPED;
-
-        memset(&Ng_ksi, 0, sizeof(Ng_ksi));
-        SeafData.ng_ksi = &Ng_ksi;
-        Ng_ksi.tsc = Tsc_type;
-        Ng_ksi.ksi = (int)amf_ue->nas.ue.ksi;
-
-        memset(&Key_amf, 0, sizeof(Key_amf));
-        SeafData.key_amf = &Key_amf;
-        OpenAPI_key_amf_type_e temp_key_type =
-                (OpenAPI_key_amf_type_e)OpenAPI_key_amf_type_KAMF;
-        Key_amf.key_type = temp_key_type;
-        ogs_hex_to_ascii(amf_ue->kamf, sizeof(amf_ue->kamf),
-                hxkamf_string, sizeof(hxkamf_string));
-        Key_amf.key_val = hxkamf_string;
-        UeContext.seaf_data = &SeafData;
-    }
+    /*
+     * TODO: Validate the transfer request and forwarded Registration Request
+     * before exporting SEAF key material. Local context validity alone does
+     * not authorize its disclosure. Omit seafData until that is implemented;
+     * the receiving Open5GS AMF performs fresh authentication after transfer.
+     */
 
     encoded_gmm_capability =
         amf_namf_comm_base64_encode_5gmm_capability(amf_ue);
@@ -1343,8 +1338,8 @@ int amf_namf_comm_handle_ue_context_transfer_response(
 
     UeContext = recvmsg->UeContextTransferRspData->ue_context;
 
-    if (!UeContext->supi) {
-        ogs_error("No SUPI");
+    if (ogs_supi_is_valid(UeContext->supi) == false) {
+        ogs_error("Invalid SUPI");
         return OGS_ERROR;
     }
 
@@ -1368,10 +1363,10 @@ int amf_namf_comm_handle_ue_context_transfer_response(
 
     if (UeContext->seaf_data) {
         if (UeContext->seaf_data->ng_ksi->tsc != OpenAPI_sc_type_NULL) {
-            amf_ue->nas.ue.tsc =
+            amf_ue->nas.amf.tsc =
                 (UeContext->seaf_data->ng_ksi->tsc ==
                  OpenAPI_sc_type_NATIVE) ? 0 : 1;
-            amf_ue->nas.ue.ksi = (uint8_t)UeContext->seaf_data->ng_ksi->ksi;
+            amf_ue->nas.amf.ksi = (uint8_t)UeContext->seaf_data->ng_ksi->ksi;
 
             ogs_ascii_to_hex(
                 UeContext->seaf_data->key_amf->key_val,
@@ -1421,10 +1416,9 @@ static char *amf_namf_comm_base64_encode_ue_security_capability(
     char *enc = NULL;
     int enc_len = 0;
 
-    char num_of_octets =
+    int num_of_octets =
             ue_security_capability.length +
-            sizeof(ue_security_capability.length) +
-            sizeof((uint8_t)OGS_NAS_5GS_REGISTRATION_REQUEST_UE_SECURITY_CAPABILITY_TYPE);
+            sizeof(ue_security_capability.length);
     /*
      * size [sizeof(ue_security_capability) + 1] is a sum of lengths:
      *        ue_security_capability (9 octets) +
@@ -1432,10 +1426,9 @@ static char *amf_namf_comm_base64_encode_ue_security_capability(
      */
     char security_octets_string[sizeof(ue_security_capability) + 1];
 
-    /* Security guarantee */
-    num_of_octets = ogs_min(
-            num_of_octets, sizeof(ue_security_capability) + 1);
-    enc_len = ogs_base64_encoded_size(num_of_octets);
+    /* Security guarantee: the IE is copied after the type octet */
+    num_of_octets = ogs_min(num_of_octets, (int)sizeof(ue_security_capability));
+    enc_len = ogs_base64_encoded_size(num_of_octets + 1);
 
     enc = ogs_calloc(1, enc_len);
     ogs_assert(enc);
@@ -1444,7 +1437,7 @@ static char *amf_namf_comm_base64_encode_ue_security_capability(
         OGS_NAS_5GS_REGISTRATION_REQUEST_UE_SECURITY_CAPABILITY_TYPE;
     memcpy(security_octets_string + 1, &ue_security_capability, num_of_octets);
     ogs_assert(ogs_base64_encode_from_buffer(enc, enc_len,
-            (const uint8_t *)security_octets_string, num_of_octets) > 0);
+            (const uint8_t *)security_octets_string, num_of_octets + 1) > 0);
 
     return enc;
 }
@@ -1795,6 +1788,13 @@ static void amf_namf_comm_decode_ue_session_context_list(
         char *fqdn = NULL;
         uint16_t fqdn_port = 0;
         ogs_sockaddr_t *addr = NULL, *addr6 = NULL;
+
+        if (ogs_pdu_session_id_is_valid(
+                PduSessionContext->pdu_session_id) == false) {
+            ogs_error("Invalid PDU Session Identity [PSI:%d]",
+                    PduSessionContext->pdu_session_id);
+            continue;
+        }
 
         if (!PduSessionContext->sm_context_ref) {
             ogs_error("No smContextRef [PSI:%d]",

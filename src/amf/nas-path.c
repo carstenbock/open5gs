@@ -20,6 +20,7 @@
 #include "ngap-path.h"
 #include "ngap-build.h"
 #include "gmm-build.h"
+#include "nas-security.h"
 #include "nas-path.h"
 
 int nas_5gs_send_to_gnb(amf_ue_t *amf_ue, ogs_pkbuf_t *pkbuf)
@@ -51,10 +52,29 @@ int nas_5gs_send_to_downlink_nas_transport(
 {
     int rv;
     ogs_pkbuf_t *ngapbuf = NULL;
+    ogs_nas_5gs_security_header_t *sh = NULL;
 
     ogs_assert(ran_ue);
     ogs_assert(amf_ue);
     ogs_assert(pkbuf);
+
+    /*
+     * TS 24.501 4.4.4.1: integrity protection is mandatory for the network
+     * once the secure exchange of NAS messages is established. Protect a
+     * plain 5GMM message for a UE whose connection has it established.
+     */
+    sh = (ogs_nas_5gs_security_header_t *)pkbuf->data;
+    if (amf_ue->integrity_verified &&
+        sh->extended_protocol_discriminator ==
+            OGS_NAS_EXTENDED_PROTOCOL_DISCRIMINATOR_5GMM &&
+        sh->security_header_type == OGS_NAS_SECURITY_HEADER_PLAIN_NAS_MESSAGE) {
+        pkbuf = nas_5gs_security_protect(amf_ue,
+            OGS_NAS_SECURITY_HEADER_INTEGRITY_PROTECTED_AND_CIPHERED, pkbuf);
+        if (!pkbuf) {
+            ogs_error("nas_5gs_security_protect() failed");
+            return OGS_ERROR;
+        }
+    }
 
     ngapbuf = ngap_build_downlink_nas_transport(
             ran_ue, amf_ue, pkbuf, false, false);
@@ -119,6 +139,13 @@ int nas_5gs_send_registration_accept(amf_ue_t *amf_ue)
         }
     }
 
+    gmmbuf = nas_5gs_security_protect(amf_ue,
+            OGS_NAS_SECURITY_HEADER_INTEGRITY_PROTECTED_AND_CIPHERED, gmmbuf);
+    if (!gmmbuf) {
+        ogs_error("nas_5gs_security_protect() failed");
+        return OGS_ERROR;
+    }
+
     /*
      * Previously, AMF would sends PDUSessionResourceSetupRequest
      * when the following conditions were met:
@@ -175,6 +202,10 @@ int nas_5gs_send_registration_accept(amf_ue_t *amf_ue)
             ogs_expect(rv == OGS_OK);
         }
     }
+
+    /* The UE may use this GUTI before sending Registration Complete. */
+    if (rv == OGS_OK && amf_ue->next.m_tmsi)
+        amf_ue_publish_next_guti(amf_ue);
 
     return rv;
 }
@@ -412,6 +443,12 @@ int nas_5gs_send_de_registration_request(
         ogs_pkbuf_free(gmmbuf);
         return OGS_ERROR;
     }
+    gmmbuf = nas_5gs_security_protect(amf_ue,
+            OGS_NAS_SECURITY_HEADER_INTEGRITY_PROTECTED_AND_CIPHERED, gmmbuf);
+    if (!gmmbuf) {
+        ogs_error("nas_5gs_security_protect() failed");
+        return OGS_ERROR;
+    }
     ogs_timer_start(amf_ue->t3522.timer,
             amf_timer_cfg(AMF_TIMER_T3522)->duration);
 
@@ -566,17 +603,34 @@ int nas_5gs_send_security_mode_command(amf_ue_t *amf_ue)
     if (amf_ue->t3560.pkbuf) {
         gmmbuf = amf_ue->t3560.pkbuf;
     } else {
+        /* TS 24.501 4.4.3.1: a restored context keeps the COUNT it reached */
+        if (!memcmp(amf_ue->memento.knas_int, amf_ue->knas_int,
+                    OGS_SHA256_DIGEST_SIZE/2))
+            amf_ue->memento.dl_count = amf_ue->dl_count;
+
         gmmbuf = gmm_build_security_mode_command(amf_ue);
         if (!gmmbuf) {
             ogs_error("gmm_build_security_mode_command() failed");
             return OGS_ERROR;
         }
+
+        /* TS 24.501 5.4.2.2: NAS COUNTs reset for the initial command only */
+        amf_ue->dl_count = 0;
+        amf_ue->ul_count.i32 = 0;
+        amf_ue->ul_count_accepted = false;
     }
 
     amf_ue->t3560.pkbuf = ogs_pkbuf_copy(gmmbuf);
     if (!amf_ue->t3560.pkbuf) {
         ogs_error("ogs_pkbuf_copy(amf_ue->t3560.pkbuf) failed");
         ogs_pkbuf_free(gmmbuf);
+        return OGS_ERROR;
+    }
+    gmmbuf = nas_5gs_security_protect(amf_ue,
+        OGS_NAS_SECURITY_HEADER_INTEGRITY_PROTECTED_AND_NEW_SECURITY_CONTEXT,
+        gmmbuf);
+    if (!gmmbuf) {
+        ogs_error("nas_5gs_security_protect() failed");
         return OGS_ERROR;
     }
     ogs_timer_start(amf_ue->t3560.timer,
@@ -641,6 +695,13 @@ int nas_5gs_send_configuration_update_command(
             ogs_timer_start(amf_ue->t3555.timer,
                     amf_timer_cfg(AMF_TIMER_T3555)->duration);
         }
+    }
+
+    gmmbuf = nas_5gs_security_protect(amf_ue,
+            OGS_NAS_SECURITY_HEADER_INTEGRITY_PROTECTED_AND_CIPHERED, gmmbuf);
+    if (!gmmbuf) {
+        ogs_error("nas_5gs_security_protect() failed");
+        return OGS_ERROR;
     }
 
     amf_metrics_inst_global_inc(AMF_METR_GLOB_CTR_MM_CONF_UPDATE);
@@ -775,10 +836,27 @@ int nas_send_pdu_session_modification_command(amf_sess_t *sess,
     return rv;
 }
 
+uint8_t nas_5gsm_message_type(const ogs_pkbuf_t *n1smbuf, uint8_t psi)
+{
+    const ogs_nas_5gsm_header_t *h;
+
+    if (!n1smbuf || n1smbuf->len < sizeof(*h))
+        return 0;
+
+    h = (const ogs_nas_5gsm_header_t *)n1smbuf->data;
+    if (h->extended_protocol_discriminator !=
+            OGS_NAS_EXTENDED_PROTOCOL_DISCRIMINATOR_5GSM ||
+        h->pdu_session_identity != psi)
+        return 0;
+
+    return h->message_type;
+}
+
 int nas_send_pdu_session_release_command(amf_sess_t *sess,
         ogs_pkbuf_t *n1smbuf, ogs_pkbuf_t *n2smbuf)
 {
     int rv;
+    bool n2_requested = n2smbuf != NULL;
 
     amf_ue_t *amf_ue = NULL;
     ran_ue_t *ran_ue = NULL;
@@ -786,20 +864,20 @@ int nas_send_pdu_session_release_command(amf_sess_t *sess,
     ogs_pkbuf_t *gmmbuf = NULL;
     ogs_pkbuf_t *ngapbuf = NULL;
 
-    ogs_assert(n2smbuf);
+    ogs_assert(n1smbuf || n2smbuf);
     ogs_assert(sess);
     amf_ue = amf_ue_find_by_id(sess->amf_ue_id);
     if (!amf_ue) {
         ogs_error("UE(amf-ue) context has already been removed");
         if (n1smbuf) ogs_pkbuf_free(n1smbuf);
-        ogs_pkbuf_free(n2smbuf);
+        if (n2smbuf) ogs_pkbuf_free(n2smbuf);
         return OGS_NOTFOUND;
     }
     ran_ue = ran_ue_find_by_id(amf_ue->ran_ue_id);
     if (!ran_ue) {
         ogs_error("[%s] NG context has already been removed", amf_ue->supi);
         if (n1smbuf) ogs_pkbuf_free(n1smbuf);
-        ogs_pkbuf_free(n2smbuf);
+        if (n2smbuf) ogs_pkbuf_free(n2smbuf);
         return OGS_NOTFOUND;
     }
 
@@ -807,6 +885,7 @@ int nas_send_pdu_session_release_command(amf_sess_t *sess,
         gmmbuf = gmm_build_dl_nas_transport(sess,
                 OGS_NAS_PAYLOAD_CONTAINER_N1_SM_INFORMATION, n1smbuf, 0, 0);
         if (!gmmbuf) {
+            if (n2smbuf) ogs_pkbuf_free(n2smbuf);
             ogs_error("gmm_build_dl_nas_transport() failed");
             return OGS_ERROR;
         }
@@ -830,7 +909,7 @@ int nas_send_pdu_session_release_command(amf_sess_t *sess,
      * - In this case, we should use the DownlinkNASTransport.
      *   instead of PDUSessionResourceReleaseCommand
      */
-    if (ran_ue->psimask.activated & (1 << sess->psi)) {
+    if (n2smbuf && (ran_ue->psimask.activated & (1 << sess->psi))) {
         ngapbuf = ngap_build_pdu_session_resource_release_command(
                 sess, gmmbuf, n2smbuf);
         if (!ngapbuf) {
@@ -838,20 +917,14 @@ int nas_send_pdu_session_release_command(amf_sess_t *sess,
                     "ngap_build_pdu_session_resource_release_command() failed");
             return OGS_ERROR;
         }
-
-        rv = nas_5gs_send_to_gnb(amf_ue, ngapbuf);
-        ogs_expect(rv == OGS_OK);
     } else if (gmmbuf) {
-        ogs_pkbuf_free(n2smbuf);
+        if (n2smbuf) ogs_pkbuf_free(n2smbuf);
         ngapbuf = ngap_build_downlink_nas_transport(
                 ran_ue, amf_ue, gmmbuf, false, false);
         if (!ngapbuf) {
             ogs_error("ngap_build_downlink_nas_transport() failed");
             return OGS_ERROR;
         }
-
-        rv = nas_5gs_send_to_gnb(amf_ue, ngapbuf);
-        ogs_expect(rv == OGS_OK);
     } else {
         /*
          * TS23.527
@@ -871,9 +944,18 @@ int nas_send_pdu_session_release_command(amf_sess_t *sess,
                 ran_ue->psimask.activated, gmmbuf, amf_ue->supi, sess->psi);
 
         ogs_pkbuf_free(n2smbuf);
-        rv = OGS_OK;
+        return OGS_OK;
     }
 
+    rv = nas_5gs_send_to_gnb(amf_ue, ngapbuf);
+    ogs_expect(rv == OGS_OK);
+    if (rv == OGS_OK) {
+        /* No N2 request means no RAN response or SMF update for N2. */
+        sess->pdu_session_release_complete_received = false;
+        sess->pdu_session_resource_release_complete = !n2_requested;
+        if (!n2_requested)
+            sess->n2_released = true;
+    }
     return rv;
 }
 

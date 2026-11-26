@@ -152,7 +152,7 @@ ED2(uint8_t digit17:4;,
 typedef struct ogs_nas_mobile_station_classmark_2_t {
     uint8_t length;
 ED5(uint8_t spare1:1;,
-    uint8_t revision_level:2;, 
+    uint8_t revision_level:2;,
     uint8_t es_ind:1;,
     uint8_t a5_1:1;,
     uint8_t rf_power_capability:3;)
@@ -211,7 +211,7 @@ typedef struct ogs_nas_authentication_failure_parameter_s {
 typedef struct ogs_nas_authentication_parameter_autn_s {
     uint8_t length;
     uint8_t autn[OGS_AUTN_LEN];
-} ogs_nas_authentication_parameter_autn_t;
+} __attribute__ ((packed)) ogs_nas_authentication_parameter_autn_t;
 
 /* 9.9.3.3 Authentication parameter RAND
  * See subclause 10.5.3.1 in 3GPP TS 24.008 [13].
@@ -242,7 +242,7 @@ ED7(uint8_t spare2:2;,
 typedef struct ogs_nas_authentication_response_parameter_s {
     uint8_t length;
     uint8_t res[OGS_MAX_RES_LEN];
-} ogs_nas_authentication_response_parameter_t;
+} __attribute__ ((packed)) ogs_nas_authentication_response_parameter_t;
 
 /* 9.9.3.6 Daylight saving time
  * See subclause 10.5.3.12 in 3GPP TS 24.008 [13].
@@ -282,7 +282,7 @@ typedef struct ogs_nas_gprs_timer_2_s {
 #define OGS_NAS_GPRS_TIMER_3_UNIT_MULTIPLES_OF_10_MM    0
 #define OGS_NAS_GPRS_TIMER_3_UNIT_MULTIPLES_OF_1_HH     1
 #define OGS_NAS_GPRS_TIMER_3_UNIT_MULTIPLES_OF_10_HH    2
-#define OGS_NAS_GPRS_TIMER_3_UNIT_MULTIPLES_OF_2_SS     3 
+#define OGS_NAS_GPRS_TIMER_3_UNIT_MULTIPLES_OF_2_SS     3
 #define OGS_NAS_GPRS_TIMER_3_UNIT_MULTIPLES_OF_30_SS    4
 #define OGS_NAS_GPRS_TIMER_3_UNIT_MULTIPLES_OF_1_MM     5
 #define OGS_NAS_GPRS_TIMER_3_UNIT_MULTIPLES_OF_320_HH   6
@@ -389,6 +389,9 @@ ED4(uint8_t ext:1;,
     uint8_t name[OGS_NAS_MAX_NETWORK_NAME_LEN];
 } __attribute__ ((packed)) ogs_nas_network_name_t;
 
+void ogs_nas_build_network_name(
+        ogs_nas_network_name_t *network_name, const char *str);
+
 /* 9.9.3.29 Time zone
  * See subclause 10.5.3.8 in 3GPP TS 24.008 [13].
  * O TV 2 */
@@ -407,9 +410,9 @@ typedef struct ogs_nas_time_zone_and_time_s {
     uint8_t min;
     uint8_t sec;
     /* The Time Zone indicates the difference, expressed in quarters of an hour,
-     * between the local time and GMT. In the first of the two semi-octets, 
-     * the first bit (bit 3 of the seventh octet of 
-     * the TP-Service-Centre-Time-Stamp field) represents 
+     * between the local time and GMT. In the first of the two semi-octets,
+     * the first bit (bit 3 of the seventh octet of
+     * the TP-Service-Centre-Time-Stamp field) represents
      * the algebraic sign of this difference (0: positive, 1: negative). */
     uint8_t timezone;
 } ogs_nas_time_zone_and_time_t;
@@ -439,7 +442,7 @@ typedef struct ogs_nas_time_zone_and_time_s {
  */
 typedef struct ogs_nas_ue_network_capability_s {
     uint8_t length;
-    union { 
+    union {
         struct {
         ED8(uint8_t eea0:1;,
             uint8_t eea1:1;,
@@ -450,9 +453,9 @@ typedef struct ogs_nas_ue_network_capability_s {
             uint8_t eea6:1;,
             uint8_t eea7:1;)
         };
-        uint8_t eea; 
+        uint8_t eea;
     };
-    union { 
+    union {
         struct {
         ED8(uint8_t eia0:1;,
             uint8_t eia1:1;,
@@ -463,9 +466,9 @@ typedef struct ogs_nas_ue_network_capability_s {
             uint8_t eia6:1;,
             uint8_t eia7:1;)
         };
-        uint8_t eia; 
+        uint8_t eia;
     };
-    union { 
+    union {
         struct {
         ED8(uint8_t uea0:1;,
             uint8_t uea1:1;,
@@ -476,9 +479,9 @@ typedef struct ogs_nas_ue_network_capability_s {
             uint8_t uea6:1;,
             uint8_t uea7:1;)
         };
-        uint8_t uea; 
+        uint8_t uea;
     };
-    union { 
+    union {
         struct {
         ED8(uint8_t ucs2:1;,
             uint8_t uia1:1;,
@@ -489,7 +492,7 @@ typedef struct ogs_nas_ue_network_capability_s {
             uint8_t uia6:1;,
             uint8_t uia7:1;)
         };
-        uint8_t uia; 
+        uint8_t uia;
     };
 ED8(uint8_t prose_direct_discovery:1;,
     uint8_t prose:1;,
@@ -692,7 +695,7 @@ typedef struct ogs_nas_additional_information_requested_s {
     uint8_t length;
 ED2(uint8_t spare:7;,
     uint8_t cipher_key:1;)
-} ogs_nas_additional_information_requested_t;
+} __attribute__ ((packed)) ogs_nas_additional_information_requested_t;
 
 /* 9.9.3.56 Ciphering key data
  * O TLV-E 35-2291 *
@@ -709,7 +712,7 @@ typedef struct ogs_nas_ciphering_key_data_s {
 typedef struct ogs_nas_wus_assistance_information_s {
     uint8_t length;
     uint8_t buffer[OGS_MAX_NAS_WUS_ASSISTANCE_INFORAMTION_LEN];
-} ogs_nas_wus_assistance_information_t;
+} __attribute__ ((packed)) ogs_nas_wus_assistance_information_t;
 
 /* 9.11.3.36A Non-3GPP NW provided policies
  * See subclause 10.5.5.37 in 3GPP TS 24.008 [12].
@@ -754,7 +757,7 @@ ED2(uint8_t paging_time_window:4;,
 typedef struct ogs_nas_ue_radio_capability_id_s {
     uint8_t length;
     uint8_t buffer[OGS_NAS_MAX_UE_RADIO_CAPABILITY_ID_LEN];
-} ogs_nas_ue_radio_capability_id_t;
+} __attribute__ ((packed)) ogs_nas_ue_radio_capability_id_t;
 
 /* 9.9.3.61 UE radio capability ID deletion indication
  * O TV 1
@@ -841,9 +844,10 @@ typedef struct ogs_nas_registration_wait_range_s {
 /* 9.9.3.76 List of PLMNs to be used in disaster condition
  * 9.11.3.83 List of PLMNs to be used in disaster condition
  * O TLV 2-n */
+#define OGS_NAS_MAX_LIST_OF_PLMNS_TO_BE_USED_IN_DISASTER_CONDITION_LEN 255
 typedef struct ogs_nas_list_of_plmns_to_be_used_in_disaster_condition_s {
     uint8_t length;
-    void *buffer;
+    uint8_t value[OGS_NAS_MAX_LIST_OF_PLMNS_TO_BE_USED_IN_DISASTER_CONDITION_LEN];
 } __attribute__ ((packed)) ogs_nas_list_of_plmns_to_be_used_in_disaster_condition_t;
 
 /* 9.9.3.77 PLMN identity
@@ -1002,7 +1006,7 @@ ED3(uint8_t type:4;,
 typedef struct ogs_nas_extended_protocol_configuration_options_s {
     uint16_t length;
     void *buffer;
-} __attribute__ ((packed)) ogs_nas_extended_protocol_configuration_options_t;
+} ogs_nas_extended_protocol_configuration_options_t;
 
 /* 9.9.4.28 Serving PLMN rate control
  * O TLV 4 */

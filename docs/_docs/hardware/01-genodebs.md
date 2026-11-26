@@ -28,8 +28,10 @@ If you have tested radio hardware from a vendor not listed with Open5GS, please 
  * NOKIA AEQD (SW: 5G20A)
  * NOKIA AEQP (SW: 5G21A)
  * NOKIA AIRSCALE ASIK+ABIL BBU + AWHQE (n78) (SW: SBTS 25R2)
+ * NOKIA AIRSCALE ASIK+ABIL BBU + AWHQE (n77) (SW: SBTS 26R2)
  * MOSO Networks Canopy 5GID1 Indoor 2T2R (5G n48 n78)
- * ZTE ITBBU ITRAN-PNF V5.65.20.20F10 (n78, n1, n3) 
+ * ZTE ITBBU ITRAN-PNF V5.65.20.20F10 (n78, n1, n3)
+ * Sercom SCE5164 n48 (SW: RC5607@230707)
 
 ### Commercial 4G
 ---
@@ -61,9 +63,14 @@ If you have tested radio hardware from a vendor not listed with Open5GS, please 
  * Nokia FRGY Flexi BTS BBU with Nokia FRCG RRU Band 5 850Mhz FDD 40W. Version 16.1A to 19.0
  * Nokia FW2FA Flexi Zone Mini-Macro Outdoor BTS, 2x20w Band 39
  * Nokia FWGR Flexi Zone Mini-Macro Outdoor BTS, 2x20w Band 1
- * Nokia FWHG Flexi Zone Indoor Pico BTS, 2x250 mW Band 7
+ * Nokia FWHG Flexi Zone Indoor Pico BTS, 2x250mW Band 7
+ * Nokia FWNB Flexi Zone Indoor Pico BTS, 2x250mW Band 40 (S/W TLF18SP_ENB)
  * Nokia FW2HHD Flexi Zone Multiband Indoor Pico BTS, Band 38/41(S/W TLS18SP_ENB)
  * Nokia Airscale - ASIA + ABIA + AHIB Band 66 (SW: SBTS325R2)
+ * Nokia Airscale - ASIA + ABIA + AZQC Band 48 (SW: SBTS26R2)
+ * Nokia FW2HHWD Flexi Zone Indoor Pico BTS, Band 41 (S/W TL24)
+ * Nokia FW2IRA Flexi Zone Indoor Pico BTS, Band 66 + LAA (S/W FL23)
+ * Nokia FW2QQG Flexi Zone Indoor Pico BTS, 2x Band 48 (S/W TL24)
  * Mikrotik Intercell B1+B3 IC322GC-b1D+b3D
  * Ruckus Q710 and Q910
  * Sercomm SCE4255W "Englewood" (band 48/CBRS, SW version DG3934v3@2308041842)

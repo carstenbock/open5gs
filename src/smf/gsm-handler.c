@@ -26,6 +26,141 @@
 #undef OGS_LOG_DOMAIN
 #define OGS_LOG_DOMAIN __gsm_log_domain
 
+#define QOS_FLOW_DESCRIPTION_MIN_LEN 3
+
+uint8_t *gsm_decode_base64(const char *src, int *out_len)
+{
+    int len, decoded;
+    uint8_t *buf = NULL;
+
+    ogs_assert(out_len);
+
+    *out_len = 0;
+
+    if (!src) {
+        ogs_error("No base64 data");
+        return NULL;
+    }
+
+    len = ogs_base64_decoded_size(src);
+    if (len <= 0) {
+        ogs_error("Invalid base64 data");
+        return NULL;
+    }
+
+    buf = ogs_calloc(1, len);
+    if (!buf) {
+        ogs_error("ogs_calloc() failed [%d]", len);
+        return NULL;
+    }
+
+    decoded = ogs_base64_decode_to_buffer(buf, len, src);
+    if (decoded <= 0) {
+        ogs_error("Invalid base64 data");
+        ogs_free(buf);
+        return NULL;
+    }
+    if (decoded > 0xffff) {
+        ogs_error("Base64 data too long [%d]", decoded);
+        ogs_free(buf);
+        return NULL;
+    }
+
+    *out_len = decoded;
+
+    return buf;
+}
+
+uint8_t *gsm_decode_qos_flow_description_ie(const char *src, int *len)
+{
+    int value_len;
+    uint8_t *buf = gsm_decode_base64(src, len);
+
+    if (!buf)
+        return NULL;
+
+    if (*len < GSM_QOS_FLOW_DESCRIPTION_IE_HEADER_LEN +
+                   QOS_FLOW_DESCRIPTION_MIN_LEN ||
+        buf[0] != GSM_QOS_FLOW_DESCRIPTION_IEI)
+        goto invalid;
+
+    value_len = (buf[1] << 8) | buf[2];
+    if (value_len != *len - GSM_QOS_FLOW_DESCRIPTION_IE_HEADER_LEN)
+        goto invalid;
+
+    memmove(buf, buf + GSM_QOS_FLOW_DESCRIPTION_IE_HEADER_LEN, value_len);
+    *len = value_len;
+    return buf;
+
+invalid:
+    ogs_free(buf);
+    *len = 0;
+    return NULL;
+}
+
+bool gsm_qos_flow_description_ie_is_valid(const char *src)
+{
+    int len;
+    uint8_t *buf = gsm_decode_qos_flow_description_ie(src, &len);
+
+    if (!buf)
+        return false;
+
+    ogs_free(buf);
+    return true;
+}
+
+int gsm_parse_qos_flow_description_ie(
+        ogs_nas_qos_flow_description_t *description, const char *src)
+{
+    ogs_nas_qos_flow_descriptions_t descriptions;
+    ogs_nas_qos_flow_description_t parsed[OGS_NAS_MAX_NUM_OF_QOS_FLOW_DESCRIPTION];
+    int len, count;
+
+    descriptions.buffer = gsm_decode_qos_flow_description_ie(src, &len);
+    if (!descriptions.buffer)
+        return OGS_ERROR;
+
+    descriptions.length = len;
+    count = ogs_nas_parse_qos_flow_descriptions(parsed, &descriptions);
+    ogs_free(descriptions.buffer);
+    if (count != 1)
+        return OGS_ERROR;
+
+    *description = parsed[0];
+    return OGS_OK;
+}
+
+/*
+ * Each QoS flow item carries the qosRules for that one flow.
+ * ogs_nas_parse_qos_rules() may fill up to OGS_NAS_MAX_NUM_OF_QOS_RULE
+ * entries, so parse into a full-size array and return a single rule.
+ */
+int gsm_parse_qos_rule_ie(ogs_nas_qos_rule_t *rule, const char *src)
+{
+    ogs_nas_qos_rules_t rules;
+    ogs_nas_qos_rule_t parsed[OGS_NAS_MAX_NUM_OF_QOS_RULE];
+    int len, count;
+
+    rules.buffer = gsm_decode_base64(src, &len);
+    if (!rules.buffer)
+        return OGS_ERROR;
+
+    if (len > OGS_NAS_MAX_QOS_RULES_LEN) {
+        ogs_free(rules.buffer);
+        return OGS_ERROR;
+    }
+
+    rules.length = len;
+    count = ogs_nas_parse_qos_rules(parsed, &rules);
+    ogs_free(rules.buffer);
+    if (count != 1)
+        return OGS_ERROR;
+
+    *rule = parsed[0];
+    return OGS_OK;
+}
+
 int gsm_handle_pdu_session_establishment_request(
         smf_sess_t *sess, ogs_sbi_stream_t *stream,
         ogs_nas_5gs_pdu_session_establishment_request_t *
@@ -110,6 +245,21 @@ static int reconfigure_packet_filter(
 
     memset(&pf->ipfw_rule, 0, sizeof(ogs_ipfw_rule_t));
     pf->direction = qos_rule->pf[i].direction;
+
+    /*
+     * TS 24.501 9.11.4.13: the packet filter direction is two bits,
+     * 00 is reserved, 01 downlink only, 10 uplink only and 11
+     * bi-directional.  A reserved value is UE input; store only the
+     * three defined values.  smf_bearer_tft_update() has no branch
+     * for the reserved value and aborts the SMF on it.
+     */
+    if (pf->direction != OGS_FLOW_DOWNLINK_ONLY &&
+            pf->direction != OGS_FLOW_UPLINK_ONLY &&
+            pf->direction != OGS_FLOW_BIDIRECTIONAL) {
+        ogs_error("Reserved packet filter direction [%d]", pf->direction);
+        return OGS_ERROR;
+    }
+
     for (j = 0; j < qos_rule->pf[i].content.num_of_component; j++) {
         switch(qos_rule->pf[i].content.component[j].type) {
         case OGS_PACKET_FILTER_MATCH_ALL:
@@ -241,14 +391,32 @@ int gsm_handle_pdu_session_modification_qos_rules(
         smf_pf_t *pf = NULL;
         smf_bearer_t *qos_flow =
             smf_qos_flow_find_by_qfi(sess, qos_rule[i].identifier);
+
+        ogs_info("[%s:%d] Requested QoS rule "
+                "[code:%d id:%d num_of_packet_filter:%d]",
+                smf_ue->supi, sess->psi,
+                qos_rule[i].code, qos_rule[i].identifier,
+                qos_rule[i].num_of_packet_filter);
+
         if (!qos_flow) {
-            ogs_error("No Qos Flow");
+            ogs_error("[%s:%d] No QoS flow [QRI/QFI:%d]",
+                    smf_ue->supi, sess->psi, qos_rule[i].identifier);
             continue;
         }
 
         ogs_list_init(&qos_flow->pf_to_add_list);
 
         if (qos_rule[i].code == OGS_NAS_QOS_CODE_DELETE_EXISTING_QOS_RULE) {
+            /*
+             * Keep the default QoS flow for the PDU session lifetime.
+             * Use the stored flow rather than the UE-provided DQR bit.
+             */
+            if (qos_flow == smf_default_bearer_in_sess(sess)) {
+                ogs_error("[%s:%d] Cannot delete default QoS rule [QRI/QFI:%d]",
+                        smf_ue->supi, sess->psi, qos_rule[i].identifier);
+                return OGS_ERROR;
+            }
+
             smf_pf_remove_all(qos_flow);
 
             *pfcp_flags |= OGS_PFCP_MODIFY_REMOVE;
@@ -268,8 +436,22 @@ int gsm_handle_pdu_session_modification_qos_rules(
             for (j = 0; j < qos_rule[i].num_of_packet_filter &&
                         j < OGS_MAX_NUM_OF_FLOW_IN_NAS; j++) {
 
+                /*
+                 * The per-flow packet filter pool is limited to
+                 * OGS_MAX_NUM_OF_FLOW_IN_BEARER, but the UE can keep adding
+                 * packet filters to the same QoS flow -- either with several
+                 * rules in one request or with repeated requests -- since
+                 * "modify existing QoS rule and add packet filters" does not
+                 * remove the previous ones. Exhausting the pool is therefore
+                 * UE input, not an internal error: reject the request.
+                 */
                 pf = smf_pf_add(qos_flow);
-                ogs_assert(pf);
+                if (!pf) {
+                    ogs_error("[%s:%d] Overflow: PacketFilter in QoS flow "
+                            "[QRI/QFI:%d]",
+                            smf_ue->supi, sess->psi, qos_rule[i].identifier);
+                    return OGS_ERROR;
+                }
 
                 if (reconfigure_packet_filter(pf, &qos_rule[i], j) <= 0) {
                     ogs_error("[%s:%d] Invalid packet filter",
@@ -317,11 +499,16 @@ int gsm_handle_pdu_session_modification_qos_rules(
                     ogs_ipfw_copy_and_swap(&tmp, &pf->ipfw_rule);
                     pf->flow_description =
                         ogs_ipfw_encode_flow_description(&tmp);
-                    ogs_assert(pf->flow_description);
                 } else {
                     pf->flow_description =
                         ogs_ipfw_encode_flow_description(&pf->ipfw_rule);
-                    ogs_assert(pf->flow_description);
+                }
+
+                if (!pf->flow_description) {
+                    ogs_error("[%s:%d] Invalid packet filter [pf-direction=%d]",
+                            smf_ue->supi, sess->psi, pf->direction);
+                    smf_pf_remove(pf);
+                    return OGS_ERROR;
                 }
 
                 if (qos_rule[i].code ==
@@ -379,6 +566,14 @@ int gsm_handle_pdu_session_modification_qos_rules(
     return OGS_OK;
 }
 
+static uint64_t gsm_qos_flow_bitrate(ogs_nas_bitrate_t *nas_bitrate)
+{
+    uint64_t bitrate = ogs_nas_bitrate_to_uint64(nas_bitrate);
+
+    /* Keep the rate representable in the N2 QoS flow parameters. */
+    return ogs_min(bitrate, OGS_MAX_BITRATE_NGAP);
+}
+
 int gsm_handle_pdu_session_modification_qos_flow_descriptions(
         smf_sess_t *sess,
         ogs_nas_qos_flow_descriptions_t *requested_qos_flow_descriptions,
@@ -410,8 +605,78 @@ int gsm_handle_pdu_session_modification_qos_flow_descriptions(
         smf_bearer_t *qos_flow =
             smf_qos_flow_find_by_qfi(
                     sess, qos_flow_description[i].identifier);
+
+        ogs_info("[%s:%d] Requested QoS flow description "
+                "[code:%d qfi:%d E_bit:%d num_of_parameter:%d]",
+                smf_ue->supi, sess->psi,
+                qos_flow_description[i].code,
+                qos_flow_description[i].identifier,
+                qos_flow_description[i].E_bit,
+                qos_flow_description[i].num_of_parameter);
+
         if (!qos_flow) {
-            ogs_error("No Qos Flow");
+            ogs_error("[%s:%d] No QoS flow [QFI:%d]",
+                    smf_ue->supi, sess->psi,
+                    qos_flow_description[i].identifier);
+            continue;
+        }
+
+        if (qos_flow_description[i].code ==
+                OGS_NAS_DELETE_NEW_QOS_FLOW_DESCRIPTION) {
+            /*
+             * Issue #4672: smfd aborted while tearing down a VoNR call.
+             *
+             * Root cause
+             * ----------
+             * The QoS rules IE (TS24.501 9.11.4.13) and the QoS flow
+             * descriptions IE (9.11.4.12) are independent IEs, each with
+             * its own operation codes. Deleting a QoS flow therefore has
+             * three valid encodings:
+             *   1) QoS rule delete only,
+             *   2) QoS flow description delete only,
+             *   3) QoS rule delete + QoS flow description delete, paired
+             *      on the same QFI.
+             * For a GBR QoS flow (e.g. VoNR voice, 5QI 1) form 3) is the
+             * one conformant UEs use: per 9.11.4.13/9.11.4.12 leaving a
+             * GBR QoS rule whose QFI has no associated QoS flow
+             * description (or vice versa) is a syntactical error in the
+             * QoS operation, so the rule and the flow description must be
+             * deleted together.
+             *
+             * In Open5GS, removal of a QoS flow is driven solely by
+             * OGS_PFCP_MODIFY_REMOVE, which only the QoS rules handler
+             * sets (via smf_pf_remove_all() + adding the flow to
+             * qos_flow_to_modify_list; the flow is finally freed by
+             * smf_bearer_remove() in the N4 handler once REMOVE is set).
+             * Previously this handler ignored the operation code and set
+             * OGS_PFCP_MODIFY_QOS_MODIFY for every flow description. On
+             * the paired delete (form 3) that left both REMOVE (from the
+             * rule) and QOS_MODIFY (from this description) set for the
+             * same flow, tripping the invariant asserted in
+             * gsm_handle_pdu_session_modification_request()
+             * (pfcp_flags 0x8080 = REMOVE | QOS_MODIFY) and aborting the
+             * SMF on an otherwise standards-compliant request.
+             *
+             * Fix
+             * ---
+             * A "Delete existing QoS flow description" carries no
+             * parameters (E bit = 0, number of parameters = 0), so there
+             * is nothing to modify here. Skip it and let the paired QoS
+             * rule delete drive the removal. This keeps forms 1) and 3)
+             * working and no longer manufactures QOS_MODIFY out of a
+             * delete.
+             *
+             * Note on form 2) (flow description delete without the paired
+             * rule delete): with this skip, nothing is added to
+             * qos_flow_to_modify_list, so the caller's count check
+             * rejects the request. We deliberately do not treat a lone
+             * flow description delete as a removal: removal in Open5GS is
+             * keyed off the QoS rule, and for a GBR flow a lone flow
+             * description delete is itself a syntactical error under
+             * 9.11.4.12. If future requirements need form 2) to actually
+             * remove the flow, this branch would instead set
+             * OGS_PFCP_MODIFY_REMOVE and add the flow to the modify list.
+             */
             continue;
         }
 
@@ -421,19 +686,19 @@ int gsm_handle_pdu_session_modification_qos_flow_descriptions(
                 /* Nothing */
                 break;
             case OGS_NAX_QOS_FLOW_PARAMETER_ID_GFBR_UPLINK:
-                qos_flow->qos.gbr.uplink = ogs_nas_bitrate_to_uint64(
+                qos_flow->qos.gbr.uplink = gsm_qos_flow_bitrate(
                         &qos_flow_description[i].param[j].br);
                 break;
             case OGS_NAX_QOS_FLOW_PARAMETER_ID_GFBR_DOWNLINK:
-                qos_flow->qos.gbr.downlink = ogs_nas_bitrate_to_uint64(
+                qos_flow->qos.gbr.downlink = gsm_qos_flow_bitrate(
                         &qos_flow_description[i].param[j].br);
                 break;
             case OGS_NAX_QOS_FLOW_PARAMETER_ID_MFBR_UPLINK:
-                qos_flow->qos.mbr.uplink = ogs_nas_bitrate_to_uint64(
+                qos_flow->qos.mbr.uplink = gsm_qos_flow_bitrate(
                         &qos_flow_description[i].param[j].br);
                 break;
             case OGS_NAX_QOS_FLOW_PARAMETER_ID_MFBR_DOWNLINK:
-                qos_flow->qos.mbr.downlink = ogs_nas_bitrate_to_uint64(
+                qos_flow->qos.mbr.downlink = gsm_qos_flow_bitrate(
                         &qos_flow_description[i].param[j].br);
                 break;
             default:
@@ -512,20 +777,45 @@ int gsm_handle_pdu_session_modification_request(
     }
 
     if (pfcp_flags & OGS_PFCP_MODIFY_REMOVE) {
-        ogs_assert((pfcp_flags &
-                    (OGS_PFCP_MODIFY_TFT_NEW|OGS_PFCP_MODIFY_TFT_ADD|
-                    OGS_PFCP_MODIFY_TFT_REPLACE|OGS_PFCP_MODIFY_TFT_DELETE|
-                    OGS_PFCP_MODIFY_QOS_MODIFY)) == 0);
+        /*
+         * Issue #4672
+         *
+         * pfcp_flags is derived from the content of the UE's
+         * PDU Session Modification Request, so a misbehaving UE can
+         * request a removal combined with a TFT/QoS modification for
+         * the same QoS flow. This is invalid input, not an internal
+         * error: log the exact flag combination and reject the
+         * request instead of aborting the SMF.
+         */
+        if (pfcp_flags &
+                (OGS_PFCP_MODIFY_TFT_NEW|OGS_PFCP_MODIFY_TFT_ADD|
+                OGS_PFCP_MODIFY_TFT_REPLACE|OGS_PFCP_MODIFY_TFT_DELETE|
+                OGS_PFCP_MODIFY_QOS_MODIFY)) {
+            ogs_error("[%s:%d] Invalid modification request "
+                    "[REMOVE combined with TFT/QOS-MODIFY "
+                    "pfcp_flags:0x%llx]",
+                    smf_ue->supi, sess->psi, (long long)pfcp_flags);
+            goto cleanup;
+        }
 
     } else if (pfcp_flags &
                 (OGS_PFCP_MODIFY_TFT_NEW|OGS_PFCP_MODIFY_TFT_ADD|
                 OGS_PFCP_MODIFY_TFT_REPLACE|OGS_PFCP_MODIFY_TFT_DELETE|
                 OGS_PFCP_MODIFY_QOS_MODIFY)) {
 
-        ogs_assert((pfcp_flags & OGS_PFCP_MODIFY_REMOVE) == 0);
+        /* TFT/QoS modification without removal */
+        if (pfcp_flags & OGS_PFCP_MODIFY_REMOVE) {
+            ogs_error("[%s:%d] Invalid modification request "
+                    "[TFT/QOS-MODIFY combined with REMOVE "
+                    "pfcp_flags:0x%llx]",
+                    smf_ue->supi, sess->psi, (long long)pfcp_flags);
+            ogs_assert_if_reached();
+        }
 
     } else {
-        ogs_fatal("Unknown PFCP-Flags : [0x%llx]", (long long)pfcp_flags);
+        ogs_error("[%s:%d] Invalid modification request "
+                "[Unknown pfcp_flags:0x%llx]",
+                smf_ue->supi, sess->psi, (long long)pfcp_flags);
         ogs_assert_if_reached();
     }
 

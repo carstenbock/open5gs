@@ -71,7 +71,7 @@ void s1ap_state_operational(ogs_fsm_t *s, mme_event_t *e)
         pdu = e->s1ap_message;
         ogs_assert(pdu);
 
-        if (!enb->state.s1_setup_success &&
+        if (!enb->setup_complete &&
             !(pdu->present == S1AP_S1AP_PDU_PR_initiatingMessage &&
                 pdu->choice.initiatingMessage->procedureCode ==
                     S1AP_ProcedureCode_id_S1Setup)) {
@@ -127,7 +127,7 @@ void s1ap_state_operational(ogs_fsm_t *s, mme_event_t *e)
                 s1ap_handle_s1_reset(enb, pdu);
                 break;
             case S1AP_ProcedureCode_id_ErrorIndication:
-                /* TODO */
+                s1ap_handle_error_indication(enb, pdu);
                 break;
             case S1AP_ProcedureCode_id_NASNonDeliveryIndication:
                 /* TODO */

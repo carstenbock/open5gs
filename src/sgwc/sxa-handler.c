@@ -147,7 +147,7 @@ void sgwc_sxa_handle_session_establishment_response(
     int rv;
     uint8_t cause_value = 0;
 
-    ogs_pfcp_f_seid_t *up_f_seid = NULL;
+    ogs_pfcp_f_seid_t up_f_seid;
 
     int sgw_s5c_len;
     ogs_gtp2_f_teid_t sgw_s5c_teid;
@@ -196,9 +196,14 @@ void sgwc_sxa_handle_session_establishment_response(
         cause_value = OGS_GTP2_CAUSE_CONTEXT_NOT_FOUND;
     }
 
+    memset(&up_f_seid, 0, sizeof(up_f_seid));
     if (pfcp_rsp->up_f_seid.presence == 0) {
         ogs_error("No UP F-SEID");
         cause_value = OGS_GTP2_CAUSE_MANDATORY_IE_MISSING;
+    } else if (ogs_pfcp_parse_f_seid(
+                &up_f_seid, &pfcp_rsp->up_f_seid) == 0) {
+        ogs_error("Invalid UP F-SEID");
+        cause_value = OGS_GTP2_CAUSE_MANDATORY_IE_INCORRECT;
     }
 
     if (pfcp_rsp->cause.presence) {
@@ -322,9 +327,7 @@ void sgwc_sxa_handle_session_establishment_response(
     ogs_assert(rv == OGS_OK);
 
     /* UP F-SEID */
-    up_f_seid = pfcp_rsp->up_f_seid.data;
-    ogs_assert(up_f_seid);
-    sess->sgwu_sxa_seid = be64toh(up_f_seid->seid);
+    sess->sgwu_sxa_seid = up_f_seid.seid;
 
     /* Receive Control Plane(UL) : PGW-S5C */
     pgw_s5c_teid = create_session_request->
@@ -621,6 +624,18 @@ void sgwc_sxa_handle_session_modification_response(
                             &tunnel->local_addr, &tunnel->local_addr6));
                     tunnel->local_teid = pdr->f_teid.teid;
                 }
+
+                /*
+                 * pfcp_cause_value is final at this point, so the tunnel
+                 * is marked as installed only if the UP function has
+                 * accepted every Created PDR.
+                 */
+                if (pfcp_cause_value == OGS_PFCP_CAUSE_REQUEST_ACCEPTED &&
+                    (tunnel->interface_type ==
+                        OGS_GTP2_F_TEID_SGW_GTP_U_FOR_DL_DATA_FORWARDING ||
+                     tunnel->interface_type ==
+                        OGS_GTP2_F_TEID_SGW_GTP_U_FOR_UL_DATA_FORWARDING))
+                    tunnel->indirect_data_forwarding_created = true;
             }
         }
 
@@ -755,21 +770,26 @@ void sgwc_sxa_handle_session_modification_response(
      */
     if (flags & OGS_PFCP_MODIFY_REMOVE) {
         if (flags & OGS_PFCP_MODIFY_INDIRECT) {
-            s11_xact = ogs_gtp_xact_find_by_id(pfcp_xact->assoc_xact_id);
+            uint32_t assoc_xact_id = pfcp_xact->assoc_xact_id;
+
+            s11_xact = ogs_gtp_xact_find_by_id(assoc_xact_id);
             if (!s11_xact) {
-                ogs_error("GTP transaction(S11) has already been removed [%d]",
+                ogs_warn("[PDR-TRACE] S11 transaction has already been "
+                        "removed [%u]; continue local indirect tunnel cleanup",
                         pfcp_xact->assoc_xact_id);
-                ogs_pfcp_xact_commit(pfcp_xact);
-                return;
             }
 
             ogs_pfcp_xact_commit(pfcp_xact);
 
             ogs_assert(flags & OGS_PFCP_MODIFY_SESSION);
+            /*
+             * s11_xact may already be gone here, so match the PFCP
+             * transactions by the association ID they carry.
+             */
             if (SGWC_SESSION_SYNC_DONE_FOR(sgwc_ue,
                 OGS_PFCP_SESSION_MODIFICATION_REQUEST_TYPE, flags,
-                s11_xact->id)) {
-
+                assoc_xact_id)) {
+                int removed_tunnel_count = 0;
                 sgwc_tunnel_t *tunnel = NULL, *next_tunnel = NULL;
                 ogs_gtp2_delete_indirect_data_forwarding_tunnel_response_t
                     *gtp_rsp = NULL;
@@ -782,10 +802,18 @@ void sgwc_sxa_handle_session_modification_response(
                             OGS_GTP2_F_TEID_SGW_GTP_U_FOR_DL_DATA_FORWARDING ||
                                 tunnel->interface_type ==
                             OGS_GTP2_F_TEID_SGW_GTP_U_FOR_UL_DATA_FORWARDING) {
+                                removed_tunnel_count++;
                                 sgwc_tunnel_remove(tunnel);
                             }
                         }
                     }
+                }
+
+                if (!s11_xact) {
+                    ogs_warn("S11 transaction has already been removed [%u]; "
+                            "reclaimed [%d] local indirect tunnels",
+                            assoc_xact_id, removed_tunnel_count);
+                    return;
                 }
 
                 gtp_rsp = &send_message.

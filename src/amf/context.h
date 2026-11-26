@@ -111,6 +111,7 @@ typedef struct amf_context_s {
     uint64_t        amf_ue_ngap_id; /* amf_ue_ngap_id generator */
 
     ogs_list_t      gnb_list;       /* GNB NGAP Client List */
+    unsigned int    num_of_setup_gnb; /* Associations admitted by NG Setup */
     ogs_list_t      amf_ue_list;
 
     ogs_hash_t      *gnb_addr_hash; /* hash table for GNB Address */
@@ -130,6 +131,13 @@ typedef struct amf_context_s {
         } t3502, t3512;
     } time;
 
+    struct {
+        bool enabled;
+        ogs_eir_action_e unknown_action;
+        ogs_eir_action_e failure_action;
+        ogs_eir_action_e missing_pei_action;
+    } eir;
+
 } amf_context_t;
 
 typedef struct amf_gnb_s {
@@ -139,6 +147,7 @@ typedef struct amf_gnb_s {
 
     ogs_fsm_t       sm;         /* A state machine */
 
+    bool            setup_complete;
     bool            gnb_id_presence;
     uint32_t        gnb_id;     /* gNB_ID received from gNB */
     uint8_t         gnb_id_length; /* gNB-ID BIT STRING length(22..32) */
@@ -150,10 +159,6 @@ typedef struct amf_gnb_s {
     char            ran_node_name[64];
     ogs_plmn_id_t   plmn_id;    /* gNB PLMN-ID received from gNB */
     ogs_sctp_sock_t sctp;       /* SCTP socket */
-
-    struct {
-        bool ng_setup_success;  /* gNB NGAP Setup complete successfuly */
-    } state;
 
     int             max_num_of_ostreams;/* SCTP Max num of outbound streams */
     uint16_t        ostream_id;         /* gnb_ostream_id generator */
@@ -229,6 +234,22 @@ struct ran_ue_s {
 #define NGAP_UE_CTX_REL_NG_HANDOVER_FAILURE                 6
     uint8_t         ue_ctx_rel_action;
 
+/*
+ * A RAN-NG context may outlive the procedure that created it. During
+ * handover the target ran_ue is linked to the amf_ue before the UE has
+ * moved, and it is only unlinked and removed when the gNB answers
+ * UEContextReleaseCommand with UEContextReleaseComplete.
+ *
+ * A gNB that owns such a context - for example a handover target after
+ * HandoverCancel - must not be able to drive UE/session procedures with
+ * it, since that would let it act on a UE that is still served by
+ * another gNB. Use this to require that the context is both the serving
+ * one and not already being released.
+ */
+#define RAN_UE_IS_SERVING(__aMF, __rAN) \
+    ((__rAN)->id == (__aMF)->ran_ue_id && \
+     (__rAN)->ue_ctx_rel_action == NGAP_UE_CTX_REL_INVALID_ACTION)
+
     bool            part_of_ng_reset_requested;
 
     struct {
@@ -244,9 +265,21 @@ struct ran_ue_s {
     /* Related Context */
     ogs_pool_id_t   gnb_id;
     ogs_pool_id_t   amf_ue_id;
+
+    /*
+     * The AMF-UE context holding this NG context.
+     *
+     * HOLDING_NG_CONTEXT() invalidates amf_ue_id, so this is the only way
+     * back to the UE when the context is finally removed. A valid value
+     * is also what tells NGAP_UE_CTX_REL_NG_CONTEXT_REMOVE that this
+     * context was held.
+     */
+    ogs_pool_id_t   holding_amf_ue_id;
 }; 
 
 typedef struct amf_ue_memento_s {
+    uint8_t ue_ksi, ue_tsc, amf_ksi, amf_tsc;
+
     /* UE security capability info: supported security features. */
     ogs_nas_ue_security_capability_t ue_security_capability;
     /* UE network capability info: supported network features. */
@@ -275,6 +308,7 @@ typedef struct amf_ue_memento_s {
     uint32_t dl_count;
     /* Uplink counter (24-bit stored in uint32_t) */
     uint32_t ul_count;
+    bool ul_count_accepted;
     /* gNB key derived from kasme */
     uint8_t kgnb[OGS_SHA256_DIGEST_SIZE];
 
@@ -317,6 +351,8 @@ struct amf_ue_s {
         uint8_t message_type; /* Type of last specific NAS message received */
         int access_type; /* 3GPP or Non-3GPP */
 
+        /* AMF-selected context identifier and the last received request's
+         * identifier. Authentication must not overwrite the received value. */
         struct {
         ED3(uint8_t tsc:1;,
             uint8_t ksi:3;,
@@ -348,6 +384,7 @@ struct amf_ue_s {
     ogs_plmn_id_t   home_plmn_id;
 
     char            *pei;
+    bool            eir_check_pending;
     uint8_t         masked_imeisv[OGS_MAX_IMEISV_LEN];
     int             masked_imeisv_len;
     char            imeisv_bcd[OGS_MAX_IMEISV_BCD_LEN+1];
@@ -424,11 +461,12 @@ struct amf_ue_s {
         bool s1_mode;
     } gmm_capability;
 
+/* Received ngKSI values are checked separately by the NAS procedures. */
 #define SECURITY_CONTEXT_IS_VALID(__aMF) \
     ((__aMF) && \
     ((__aMF)->security_context_available == 1) && \
      ((__aMF)->mac_failed == 0) && \
-     ((__aMF)->nas.ue.ksi != OGS_NAS_KSI_NO_KEY_IS_AVAILABLE))
+     ((__aMF)->nas.amf.ksi != OGS_NAS_KSI_NO_KEY_IS_AVAILABLE))
 #define CLEAR_SECURITY_CONTEXT(__aMF) \
     do { \
         ogs_assert((__aMF)); \
@@ -437,12 +475,21 @@ struct amf_ue_s {
     } while(0)
     int             security_context_available;
     int             mac_failed;
+    /* The secure exchange of NAS messages is established on the connection */
+    bool            integrity_verified;
 
     /* Authentication synch failure counter */
     uint8_t auth_synch_fail_count;
 
+    /* Authentication ngKSI-already-in-use failure counter */
+    uint8_t auth_ngksi_fail_count;
+
     /* flag: 1 = allow restoration of context, 0 = disallow */
     bool            can_restore_context;
+
+    /* Same-AMF re-registration release waits for SMC and optional EIR. */
+    bool            registration_session_release_after_authentication;
+    bool            registration_session_release_pending;
 
     /* Memento of context fields */
     amf_ue_memento_t memento;
@@ -455,14 +502,6 @@ struct amf_ue_s {
     bool send_ue_security_capability_in_path_switch_ack;
 #define CHECK_5G_AKA_CONFIRMATION(__aMF) \
     ((__aMF) && ((__aMF)->confirmation_for_5g_aka.resource_uri))
-#define STORE_5G_AKA_CONFIRMATION(__aMF, __rESOURCE_URI) \
-    do { \
-        ogs_assert((__aMF)); \
-        CLEAR_5G_AKA_CONFIRMATION(__aMF); \
-        (__aMF)->confirmation_for_5g_aka.resource_uri = \
-            ogs_strdup(__rESOURCE_URI); \
-        ogs_assert((__aMF)->confirmation_for_5g_aka.resource_uri); \
-    } while(0)
 #define CLEAR_5G_AKA_CONFIRMATION(__aMF) \
     do { \
         ogs_assert((__aMF)); \
@@ -470,9 +509,20 @@ struct amf_ue_s {
             ogs_free((__aMF)->confirmation_for_5g_aka.resource_uri); \
         (__aMF)->confirmation_for_5g_aka.resource_uri = NULL; \
     } while(0)
+#define CLEAR_5G_AKA_PENDING(__aMF) \
+    do { \
+        ogs_assert((__aMF)); \
+        if ((__aMF)->confirmation_for_5g_aka.pending_uri) \
+            ogs_free((__aMF)->confirmation_for_5g_aka.pending_uri); \
+        (__aMF)->confirmation_for_5g_aka.pending_uri = NULL; \
+    } while(0)
     struct {
-        char *resource_uri;
-        ogs_sbi_client_t *client;
+        char *resource_uri; /* Confirmed context for deregistration. */
+        char *pending_uri;  /* Challenge awaiting confirmation. */
+        ogs_pool_id_t xact_id;
+        uint8_t auts[OGS_AUTS_LEN]; /* Retry after the failure PUT completes. */
+        ogs_sbi_client_t *client; /* Current vector endpoint. */
+        ogs_sbi_client_t *confirmed_client; /* Keep DELETE endpoint alive. */
     } confirmation_for_5g_aka;
     /* Random challenge value */
     uint8_t         rand[OGS_RAND_LEN];
@@ -505,6 +555,15 @@ struct amf_ue_s {
         } __attribute__ ((packed));
         uint32_t i32;
     } ul_count;
+    /*
+     * Set once an uplink NAS message has been accepted in the current
+     * 5G NAS security context. While it is false, 'ul_count' does not yet
+     * hold a "last accepted" value and the replay check is not applied.
+     *
+     * Both are cleared by the AMF when it takes a new security context
+     * into use, never by the security header type of a received message.
+     */
+    bool            ul_count_accepted;
     /* gNB key derived from kasme */
     uint8_t         kgnb[OGS_SHA256_DIGEST_SIZE];
 
@@ -550,17 +609,33 @@ struct amf_ue_s {
     /* NG UE context */
     ogs_pool_id_t   ran_ue_id;
 
-#define HOLDING_NG_CONTEXT(__aMF) \
+/*
+ * Put the NG context __sERVING is using on hold, and record the hold in
+ * __hOLDER.
+ *
+ * __hOLDER and __sERVING are the same AMF-UE context in the ordinary
+ * case, which HOLDING_NG_CONTEXT() below spells out. They differ only in
+ * amf_ue_release_old_context(), where the NG context and the sessions
+ * still belong to the old AMF-UE while the hold has to be recorded in the
+ * new one, because the old context is removed as soon as its sessions
+ * have been moved across.
+ *
+ * Each half of this names the UE after the context it is about: the NG
+ * context released on the way in is __hOLDER's, the one put on hold is
+ * __sERVING's. They are the same suci unless the two differ.
+ */
+#define HOLDING_NG_CONTEXT_FOR(__hOLDER, __sERVING) \
     do { \
         ran_ue_t *ran_ue_holding = NULL; \
         \
-        ran_ue_holding = ran_ue_find_by_id((__aMF)->ran_ue_holding_id); \
+        /* Whatever __hOLDER is already holding, named after __hOLDER */ \
+        ran_ue_holding = ran_ue_find_by_id((__hOLDER)->ran_ue_holding_id); \
         if (ran_ue_holding) { \
             int r; \
             ogs_warn("[%s] Holding NG context already exists", \
-                    (__aMF)->suci); \
+                    (__hOLDER)->suci); \
             ogs_warn("[%s]    RAN_UE_NGAP_ID[%lld] AMF_UE_NGAP_ID[%lld]", \
-                    (__aMF)->suci, \
+                    (__hOLDER)->suci, \
                     (long long)ran_ue_holding->ran_ue_ngap_id, \
                     (long long)ran_ue_holding->amf_ue_ngap_id); \
             r = ngap_send_ran_ue_context_release_command( \
@@ -568,19 +643,24 @@ struct amf_ue_s {
                     NGAP_Cause_PR_nas, NGAP_CauseNas_normal_release, \
                     NGAP_UE_CTX_REL_NG_CONTEXT_REMOVE, 0); \
             ogs_expect(r == OGS_OK); \
-        } else if ((__aMF)->ran_ue_holding_id != OGS_INVALID_POOL_ID) { \
+        } else if ((__hOLDER)->ran_ue_holding_id != OGS_INVALID_POOL_ID) { \
             ogs_warn("[%s] Holding NG context has already been removed", \
-                    (__aMF)->suci); \
+                    (__hOLDER)->suci); \
         } \
-        (__aMF)->ran_ue_holding_id = OGS_INVALID_POOL_ID; \
+        (__hOLDER)->ran_ue_holding_id = OGS_INVALID_POOL_ID; \
         \
-        ran_ue_holding = ran_ue_find_by_id((__aMF)->ran_ue_id); \
+        /* The context being held is __sERVING's, and is named after it */ \
+        ran_ue_holding = ran_ue_find_by_id((__sERVING)->ran_ue_id); \
         if (ran_ue_holding) { \
+            /* The sessions are __sERVING's, the hold is __hOLDER's */ \
+            amf_ue_note_stale_user_plane((__sERVING), ran_ue_holding); \
+            ran_ue_holding->holding_amf_ue_id = (__hOLDER)->id; \
+            \
             ran_ue_holding->amf_ue_id = OGS_INVALID_POOL_ID; \
             \
-            ogs_warn("[%s] Holding NG Context", (__aMF)->suci); \
+            ogs_warn("[%s] Holding NG Context", (__sERVING)->suci); \
             ogs_warn("[%s]    RAN_UE_NGAP_ID[%lld] AMF_UE_NGAP_ID[%lld]", \
-                    (__aMF)->suci, \
+                    (__sERVING)->suci, \
                     (long long)ran_ue_holding->ran_ue_ngap_id, \
                     (long long)ran_ue_holding->amf_ue_ngap_id); \
             \
@@ -589,11 +669,13 @@ struct amf_ue_s {
             ogs_timer_start(ran_ue_holding->t_ng_holding, \
                     amf_timer_cfg(AMF_TIMER_NG_HOLDING)->duration); \
             \
-            (__aMF)->ran_ue_holding_id = (__aMF)->ran_ue_id; \
+            (__hOLDER)->ran_ue_holding_id = (__sERVING)->ran_ue_id; \
         } else \
             ogs_error("[%s] NG Context has already been removed", \
-                    (__aMF)->suci); \
+                    (__sERVING)->suci); \
     } while(0)
+#define HOLDING_NG_CONTEXT(__aMF) \
+    HOLDING_NG_CONTEXT_FOR((__aMF), (__aMF))
 #define CLEAR_NG_CONTEXT(__aMF) \
     do { \
         ran_ue_t *ran_ue_holding = NULL; \
@@ -617,6 +699,19 @@ struct amf_ue_s {
         (__aMF)->ran_ue_holding_id = OGS_INVALID_POOL_ID; \
     } while(0)
     ogs_pool_id_t   ran_ue_holding_id;
+
+    /*
+     * N2 handovers this UE has been through, counted where the AMF is certain.
+     *
+     * A handover that is commanded and then simply never completes is not
+     * counted anywhere: the AMF has no guard timer for one, and the UE
+     * re-attaching afterwards is indistinguishable from an ordinary power
+     * cycle. attempted less completed less rejected is therefore the number
+     * that failed silently, which is the number worth looking at.
+     */
+    uint32_t        ho_attempted;
+    uint32_t        ho_completed;
+    uint32_t        ho_rejected;
 
 #define CLEAR_AMF_UE_ALL_TIMERS(__aMF) \
     do { \
@@ -748,7 +843,11 @@ typedef struct amf_sess_s {
     } sm_context;
 
     bool pdu_session_release_complete_received;
-    bool pdu_session_resource_release_response_received;
+    /* The RAN has answered, or the SMF requested only N1. */
+    bool pdu_session_resource_release_complete;
+
+    /* PDUSessionResourceSetupRequest sent, its response not yet */
+    bool pdu_session_resource_setup_request_pending;
 
     /* SMF sends the REQUEST
      * of [POST] /namf-comm/v1/ue-contexts/{supi}/n1-n2-messages */
@@ -799,6 +898,7 @@ typedef struct amf_sess_s {
         ogs_pkbuf_t *pdu_session_resource_setup_request;
         ogs_pkbuf_t *pdu_session_resource_modification_command;
         ogs_pkbuf_t *path_switch_request_ack;
+        ogs_pkbuf_t *path_switch_request_unsuccessful;
         ogs_pkbuf_t *handover_request;
         ogs_pkbuf_t *handover_command;
     } transfer;
@@ -903,7 +1003,7 @@ typedef struct amf_sess_s {
         } \
         (__sESS)->gsm_message.n2buf = __n2Buf; \
         \
-        ogs_assert((__sESS)->gsm_message.n2buf); \
+        ogs_assert((__sESS)->gsm_message.n1buf || (__sESS)->gsm_message.n2buf); \
         \
         (__sESS)->gsm_message.type = __tYPE; \
     } while(0);
@@ -974,6 +1074,23 @@ typedef struct amf_sess_s {
      */
     ogs_pool_id_t   ran_ue_id;
 
+    /*
+     * A held NG context that the SMF may still believe this session's user
+     * plane is established on.
+     *
+     * Set when that NG context is put on hold, and cleared only where the
+     * SMF has said otherwise: on a successful Update SM Context response,
+     * when the SM Context is released, or when the context it names is
+     * removed and the note can no longer mean anything. It is deliberately
+     * NOT cleared when a request is dispatched - OGS_OK from
+     * amf_sess_sbi_discover_and_send() means the transaction started, not
+     * that the SMF took it - so a request that never arrives leaves this
+     * standing.
+     *
+     * Unlike ran_ue_id above it is therefore not a "latest known" value.
+     */
+    ogs_pool_id_t   stale_ran_ue_id;
+
     ogs_s_nssai_t s_nssai;
     ogs_s_nssai_t mapped_hplmn;
     bool mapped_hplmn_presence;
@@ -990,6 +1107,7 @@ int amf_context_parse_config(void);
 int amf_context_nf_info(void);
 
 amf_gnb_t *amf_gnb_add(ogs_sock_t *sock, ogs_sockaddr_t *addr);
+void amf_gnb_mark_setup_complete(amf_gnb_t *gnb);
 void amf_gnb_remove(amf_gnb_t *gnb);
 void amf_gnb_remove_all(void);
 amf_gnb_t *amf_gnb_find_by_addr(ogs_sockaddr_t *addr);
@@ -1008,6 +1126,8 @@ ran_ue_t *ran_ue_find_by_amf_ue_ngap_id(uint64_t amf_ue_ngap_id);
 ran_ue_t *ran_ue_find_by_id(ogs_pool_id_t id);
 
 void amf_ue_new_guti(amf_ue_t *amf_ue);
+void amf_ue_publish_next_guti(amf_ue_t *amf_ue);
+void amf_ue_unpublish_next_guti(amf_ue_t *amf_ue);
 void amf_ue_confirm_guti(amf_ue_t *amf_ue);
 
 amf_ue_t *amf_ue_add(ran_ue_t *ran_ue);
@@ -1022,7 +1142,9 @@ amf_ue_t *amf_ue_find_by_suci(char *suci);
 amf_ue_t *amf_ue_find_by_supi(char *supi);
 amf_ue_t *amf_ue_find_by_ue_context_id(char *ue_context_id);
 
-amf_ue_t *amf_ue_find_by_message(ogs_nas_5gs_message_t *message);
+/* pending_guti is an optional output for NAS Registration Request lookup. */
+amf_ue_t *amf_ue_find_by_message(
+        ogs_nas_5gs_message_t *message, bool *pending_guti);
 void amf_ue_set_suci(amf_ue_t *amf_ue,
         ogs_nas_5gs_mobile_identity_t *mobile_identity);
 void amf_ue_set_supi(amf_ue_t *amf_ue, char *supi);
@@ -1079,6 +1201,9 @@ OpenAPI_rat_type_e amf_ue_rat_type(amf_ue_t *amf_ue);
  */
 void amf_ue_associate_ran_ue(amf_ue_t *amf_ue, ran_ue_t *ran_ue);
 void amf_ue_deassociate_ran_ue(amf_ue_t *amf_ue, ran_ue_t *ran_ue);
+
+/* Note the sessions of amf_ue whose user plane stays behind on ran_ue */
+void amf_ue_note_stale_user_plane(amf_ue_t *amf_ue, ran_ue_t *ran_ue);
 void source_ue_associate_target_ue(ran_ue_t *source_ue, ran_ue_t *target_ue);
 void source_ue_deassociate_target_ue(ran_ue_t *ran_ue);
 

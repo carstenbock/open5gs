@@ -29,8 +29,9 @@ type_list["Header compression configuration"]["encode"] = \
 type_list["DNN"]["decode"] = \
 "    {\n" \
 "        char data_network_name[OGS_MAX_DNN_LEN+1];\n" \
-"        dnn->length = ogs_fqdn_parse(data_network_name, dnn->value, ogs_min(dnn->length, OGS_MAX_DNN_LEN));\n" \
-"        if (dnn->length > 0) {\n" \
+"        int parsed = ogs_fqdn_parse(data_network_name, dnn->value, ogs_min(dnn->length, OGS_MAX_DNN_LEN));\n" \
+"        if (parsed > 0) {\n" \
+"            dnn->length = parsed;\n" \
 "            ogs_cpystrn(dnn->value, data_network_name, ogs_min(dnn->length, OGS_MAX_DNN_LEN)+1);\n" \
 "        } else {\n" \
 "            ogs_error(\"UE not APN setting\");\n" \
@@ -42,8 +43,13 @@ type_list["DNN"]["encode"] = \
 "    size = target.length + sizeof(target.length);\n\n"
 
 type_list["Session-AMBR"]["decode"] = \
-"    session_ambr->downlink.value = be16toh(source->downlink.value);\n" \
-"    session_ambr->uplink.value = be16toh(source->uplink.value);\n\n"
+"    if (size != (int)sizeof(*session_ambr)) {\n" \
+"        ogs_error(\"Invalid Session-AMBR length [%d]\",\n" \
+"                session_ambr->length);\n" \
+"        return -1;\n" \
+"    }\n\n" \
+"    session_ambr->downlink.value = be16toh(session_ambr->downlink.value);\n" \
+"    session_ambr->uplink.value = be16toh(session_ambr->uplink.value);\n\n"
 
 type_list["Session-AMBR"]["encode"] = \
 "    target.downlink.value = htobe16(session_ambr->downlink.value);\n" \

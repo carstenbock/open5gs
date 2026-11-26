@@ -41,7 +41,7 @@ typedef struct ogs_nas_5gs_guti_s {
 typedef struct ogs_nas_dnn_s {
     uint8_t length;
     char value[OGS_MAX_DNN_LEN+1];
-} ogs_nas_dnn_t;
+} __attribute__ ((packed)) ogs_nas_dnn_t;
 
 /* 9.11.2.2 EAP message
  * O TLV-E 7-1503 */
@@ -83,7 +83,7 @@ int ogs_nas_parse_s_nssai(
 typedef struct ogs_nas_service_level_aa_container_s {
     uint16_t length;
     void *buffer;
-} __attribute__ ((packed)) ogs_nas_service_level_aa_container_t;
+} ogs_nas_service_level_aa_container_t;
 
 /* 9.11.3.1 5GMM capability
  * O TLV 3-15 */
@@ -280,7 +280,7 @@ ED8(uint8_t spare:1;,
     uint8_t ethernet_header_compression_for_control_plane_ciot_5gs_optimization:1;,
     uint8_t atsss_support_indicator:1;,
     uint8_t location_services_indicator_in_5gc:1;)
-} ogs_nas_5gs_network_feature_support_t;
+} __attribute__ ((packed)) ogs_nas_5gs_network_feature_support_t;
 
 /* 9.11.3.6 5GS registration result
  * O TLV 3-5 */
@@ -292,7 +292,7 @@ ED6(uint8_t spare:1;,
     uint8_t network_slice_specific_authentication_and_authorization_is_to_be_performed:1;,
     uint8_t sms_over_nas_transport_allowed:1;,
     uint8_t value:3;)
-} ogs_nas_5gs_registration_result_t;
+} __attribute__ ((packed)) ogs_nas_5gs_registration_result_t;
 
 /* 9.11.3.7 5GS registration type
  * M V 1/2 */
@@ -400,7 +400,7 @@ ED7(uint8_t spare:2;,
 typedef struct ogs_nas_abba_s {
     uint8_t length;
     uint8_t value[OGS_NAS_MAX_ABBA_LEN];
-} ogs_nas_abba_t;
+} __attribute__ ((packed)) ogs_nas_abba_t;
 
 /* 9.11.3.11 Access Type
  * M V 1/2 */
@@ -521,14 +521,14 @@ ED2(uint8_t type:4;,
 typedef struct ogs_nas_mapped_nssai_s {
     uint8_t length;
     char buffer[OGS_NAS_MAX_MAPPED_NSSAI_LEN];
-} ogs_nas_mapped_nssai_t;
+} __attribute__ ((packed)) ogs_nas_mapped_nssai_t;
 
 /* 9.11.3.33 message container
  * O TLV-E 4-n */
 typedef struct ogs_nas_message_container_s {
     uint16_t length;
     void *buffer;
-} __attribute__ ((packed)) ogs_nas_message_container_t;
+} ogs_nas_message_container_t;
 
 /* 9.11.3.36 Network slicing indication
  * O TV 1 */
@@ -537,7 +537,7 @@ ED4(uint8_t type:4;,
     uint8_t spare:2;,
     uint8_t default_configured_nssai_indication:1;,
     uint8_t network_slicing_subscription_change_indication:1;)
-}  __attribute__ ((packed)) ogs_nas_network_slicing_indication_t;
+} __attribute__ ((packed)) ogs_nas_network_slicing_indication_t;
 
 /* 9.11.3.37 NSSAI
  * O TLV 4-72 */
@@ -617,7 +617,7 @@ typedef ogs_nas_allowed_pdu_session_status_t ogs_nas_pdu_session_status_t;
 typedef struct ogs_nas_rejected_nssai_s {
     uint8_t length;
     char buffer[OGS_NAS_MAX_REJECTED_NSSAI_LEN];
-} ogs_nas_rejected_nssai_t;
+} __attribute__ ((packed)) ogs_nas_rejected_nssai_t;
 
 typedef struct ogs_nas_rejected_s_nssai_s {
 #define OGS_NAS_REJECTED_S_NSSAI_NOT_AVIALABLE_IN_PLMN 0
@@ -643,7 +643,7 @@ int ogs_nas_parse_rejected_nssai(
 typedef struct ogs_nas_service_area_list_s {
     uint8_t length;
     uint8_t buffer[112];
-} ogs_nas_service_area_list_t;
+} __attribute__ ((packed)) ogs_nas_service_area_list_t;
 
 /* 9.11.3.50 Service type
  * M V 1/2 */
@@ -768,21 +768,21 @@ typedef struct ogs_nas_additional_request_result_s ogs_nas_5gs_additional_reques
 typedef struct ogs_nas_nssrg_information_s {
     uint16_t length;
     void *buffer;
-} __attribute__ ((packed)) ogs_nas_nssrg_information_t;
+} ogs_nas_nssrg_information_t;
 
 /* 9.11.3.86 Extended CAG information list
  * O TLV-E 3-n */
 typedef struct ogs_nas_extended_cag_information_list_s {
     uint16_t length;
     void *buffer;
-} __attribute__ ((packed)) ogs_nas_extended_cag_information_list_t;
+} ogs_nas_extended_cag_information_list_t;
 
 /* 9.11.3.87 NSAG information
  * O TLV-E 10-n */
 typedef struct ogs_nas_nsag_information_s {
     uint16_t length;
     void *buffer;
-} __attribute__ ((packed)) ogs_nas_nsag_information_t;
+} ogs_nas_nsag_information_t;
 
 /* 9.11.3.91 Priority indicator
  * O TV 1 */
@@ -794,23 +794,26 @@ ED3(uint8_t type:4;,
 
 /* 9.11.3.92 SNPN list
  * O TLV 11-137 */
+#define OGS_NAS_MAX_SNPN_LIST_LEN 135
 typedef struct ogs_nas_snpn_list_s {
     uint8_t length;
-    void *buffer;
+    uint8_t value[OGS_NAS_MAX_SNPN_LIST_LEN];
 } __attribute__ ((packed)) ogs_nas_snpn_list_t;
 
 /* 9.11.3.93 N3IWF identifier
  * O TLV 7-n */
+#define OGS_NAS_MAX_N3IWF_IDENTIFIER_LEN 255
 typedef struct ogs_nas_n3iwf_identifier_s {
     uint8_t length;
-    void *buffer;
+    uint8_t value[OGS_NAS_MAX_N3IWF_IDENTIFIER_LEN];
 } __attribute__ ((packed)) ogs_nas_n3iwf_identifier_t;
 
 /* 9.11.3.94 TNAN information
  * O TLV 3-n */
+#define OGS_NAS_MAX_TNAN_INFORMATION_LEN 255
 typedef struct ogs_nas_tnan_information_s {
     uint8_t length;
-    void *buffer;
+    uint8_t value[OGS_NAS_MAX_TNAN_INFORMATION_LEN];
 } __attribute__ ((packed)) ogs_nas_tnan_information_t;
 
 /* 9.11.3.95 RAN timing synchronization
@@ -826,13 +829,14 @@ ED2(uint8_t spare:7;,
 typedef struct ogs_nas_extended_ladn_information_s {
     uint16_t length;
     void *buffer;
-} __attribute__ ((packed)) ogs_nas_extended_ladn_information_t;
+} ogs_nas_extended_ladn_information_t;
 
 /* 9.11.3.97 Alternative NSSAI
  * O TLV 2-146 */
+#define OGS_NAS_MAX_ALTERNATIVE_NSSAI_LEN 144
 typedef struct ogs_nas_alternative_nssai_s {
     uint8_t length;
-    void *buffer;
+    uint8_t value[OGS_NAS_MAX_ALTERNATIVE_NSSAI_LEN];
 } __attribute__ ((packed)) ogs_nas_alternative_nssai_t;
 
 /* 9.11.3.98 Type 6 IE container
@@ -840,7 +844,7 @@ typedef struct ogs_nas_alternative_nssai_s {
 typedef struct ogs_nas_type_6_ie_container_s {
     uint16_t length;
     void *buffer;
-} __attribute__ ((packed)) ogs_nas_type_6_ie_container_t;
+} ogs_nas_type_6_ie_container_t;
 
 /* 9.11.3.99 Non-3GPP access path switching indication
  * O TLV 3 */
@@ -855,13 +859,14 @@ ED2(uint8_t spare:7;,
 typedef struct ogs_nas_s_nssai_location_validity_information_s {
     uint16_t length;
     void *buffer;
-} __attribute__ ((packed)) ogs_nas_s_nssai_location_validity_information_t;
+} ogs_nas_s_nssai_location_validity_information_t;
 
 /* 9.11.3.101 S-NSSAI time validity information
  * O TLV 23-257 */
+#define OGS_NAS_MAX_S_NSSAI_TIME_VALIDITY_INFORMATION_LEN 255
 typedef struct ogs_nas_s_nssai_time_validity_information_s {
     uint8_t length;
-    void *buffer;
+    uint8_t value[OGS_NAS_MAX_S_NSSAI_TIME_VALIDITY_INFORMATION_LEN];
 } __attribute__ ((packed)) ogs_nas_s_nssai_time_validity_information_t;
 
 /* 9.11.3.102 Non-3GPP path switching information
@@ -877,7 +882,7 @@ ED2(uint8_t spare:7;,
 typedef struct ogs_nas_partial_nssai_s {
     uint16_t length;
     void *buffer;
-} __attribute__ ((packed)) ogs_nas_partial_nssai_t;
+} ogs_nas_partial_nssai_t;
 
 /* 9.11.3.104 AUN3 indication
  * O TLV 3 */
@@ -905,19 +910,21 @@ ED2(uint8_t type:4;,
 
 /* 9.11.3.107 AUN3 device security key
  * O TLV 36-257 */
+#define OGS_NAS_MAX_AUN3_DEVICE_SECURITY_KEY_CONTENT_LEN 253
 typedef struct ogs_nas_aun3_device_security_key_s {
     uint8_t length;
 ED2(uint8_t spare:6;,
     uint8_t askt:2;)
     uint8_t length_of_key_content;
-    void *key_content;
+    uint8_t key_content[OGS_NAS_MAX_AUN3_DEVICE_SECURITY_KEY_CONTENT_LEN];
 } __attribute__ ((packed)) ogs_nas_aun3_device_security_key_t;
 
 /* 9.11.3.108 On-demand NSSAI
  * O TLV 5-210 */
+#define OGS_NAS_MAX_ON_DEMAND_NSSAI_LEN 208
 typedef struct ogs_nas_on_demand_nssai_s {
     uint8_t length;
-    void *buffer;
+    uint8_t value[OGS_NAS_MAX_ON_DEMAND_NSSAI_LEN];
 } __attribute__ ((packed)) ogs_nas_on_demand_nssai_t;
 
 /* 9.11.3.109 Extended 5GMM cause
@@ -933,7 +940,7 @@ ED2(uint8_t spare:7;,
 typedef struct ogs_nas_lp_wusps_assistance_information_s {
     uint8_t length;
     uint8_t type;
-} ogs_nas_lp_wusps_assistance_information_t;
+} __attribute__ ((packed)) ogs_nas_lp_wusps_assistance_information_t;
 
 /* 9.11.3.112 LP-WUS status
  * O TV 1 */
@@ -1058,7 +1065,7 @@ typedef struct ogs_nas_integrity_protection_maximum_data_rate_s {
 typedef struct ogs_nas_mapped_eps_bearer_contexts_s {
     uint16_t length;
     void *buffer;
-} __attribute__ ((packed)) ogs_nas_mapped_eps_bearer_contexts_t;
+} ogs_nas_mapped_eps_bearer_contexts_t;
 
 /* 9.11.4.9 Maximum number of supported packet filters
  * O TV 3 */
@@ -1191,7 +1198,7 @@ typedef struct ogs_nas_qos_rule_s {
 typedef struct ogs_nas_qos_rules_s {
     uint16_t length;
     void *buffer;
-} __attribute__ ((packed)) ogs_nas_qos_rules_t;
+} ogs_nas_qos_rules_t;
 
 int ogs_nas_build_qos_rules(ogs_nas_qos_rules_t *rules,
         ogs_nas_qos_rule_t *rule, int num_of_rule);
@@ -1204,7 +1211,7 @@ int ogs_nas_parse_qos_rules(
 typedef struct ogs_nas_sm_pdu_dn_request_container_s {
     uint8_t length;
     uint8_t buffer[OGS_NAX_MAX_SM_PDU_DN_REQUESTER_CONTAINER];
-} ogs_nas_sm_pdu_dn_request_container_t;
+} __attribute__ ((packed)) ogs_nas_sm_pdu_dn_request_container_t;
 
 /* 9.11.4.16 SSC mode
  * O TV 1 */
@@ -1271,7 +1278,7 @@ typedef struct ogs_nas_ip_header_compression_configuration_s {
 typedef struct ogs_nas_ds_tt_ethernet_port_mac_address_s {
     uint8_t length;
     uint8_t buffer[OGS_NAX_MAX_EHTERNET_MAC_ADDRESS_LEN];
-} ogs_nas_ds_tt_ethernet_port_mac_address_t;
+} __attribute__ ((packed)) ogs_nas_ds_tt_ethernet_port_mac_address_t;
 
 /* 9.11.4.26 UE-DS-TT residence time
  * O TLV 10 */
@@ -1279,7 +1286,7 @@ typedef struct ogs_nas_ds_tt_ethernet_port_mac_address_s {
 typedef struct ogs_nas_ue_ds_tt_residence_time_s {
     uint8_t length;
     uint8_t buffer[OGS_NAS_MAX_UE_DS_TT_REDISENCE_TIME_LEN];
-} ogs_nas_ue_ds_tt_residence_time_t;
+} __attribute__ ((packed)) ogs_nas_ue_ds_tt_residence_time_t;
 
 /* 9.11.4.27 Port management information container
  * O TLV-E 4-65535 */
@@ -1301,14 +1308,14 @@ ED2(uint8_t spare:6;,
 typedef struct ogs_nas_requested_mbs_container_s {
     uint16_t length;
     void *buffer;
-} __attribute__ ((packed)) ogs_nas_requested_mbs_container_t;
+} ogs_nas_requested_mbs_container_t;
 
 /* 9.11.4.31 Received MBS container
  * O TLV-E 9-65538 */
 typedef struct ogs_nas_received_mbs_container_s {
     uint16_t length;
     void *buffer;
-} __attribute__ ((packed)) ogs_nas_received_mbs_container_t;
+} ogs_nas_received_mbs_container_t;
 
 /* 9.11.4.32 PDU session pair ID
  * O TLV 3 */
@@ -1329,20 +1336,21 @@ typedef struct ogs_nas_rsn_s {
 typedef struct ogs_nas_n3qai_s {
     uint16_t length;
     void *buffer;
-} __attribute__ ((packed)) ogs_nas_n3qai_t;
+} ogs_nas_n3qai_t;
 
 /* 8.11.4.37 Non-3GPP delay budget
  * O TLV-E 6-n */
 typedef struct ogs_nas_non_3gpp_delay_budget_s {
     uint16_t length;
     void *buffer;
-} __attribute__ ((packed)) ogs_nas_non_3gpp_delay_budget_t;
+} ogs_nas_non_3gpp_delay_budget_t;
 
 /* 9.11.4.38 URSP rule enforcement reports
  * O TLV 4-n */
+#define OGS_NAS_MAX_ON_URSP_RULE_ENFORCEMENT_REPORTS_LEN 255
 typedef struct ogs_nas_ursp_rule_enforcement_reports_s {
     uint8_t length;
-    void *buffer;
+    uint8_t value[OGS_NAS_MAX_ON_URSP_RULE_ENFORCEMENT_REPORTS_LEN];
 } __attribute__ ((packed)) ogs_nas_ursp_rule_enforcement_reports_t;
 
 /* 9.11.4.39 Protocol description
@@ -1350,13 +1358,14 @@ typedef struct ogs_nas_ursp_rule_enforcement_reports_s {
 typedef struct ogs_nas_protocol_description_s {
     uint16_t length;
     void *buffer;
-} __attribute__ ((packed)) ogs_nas_protocol_description_t;
+} ogs_nas_protocol_description_t;
 
 /* 9.11.4.40 ECN marking for L4S indication
  * O TLV 2-257 */
+#define OGS_NAS_MAX_ECN_MARKING_FOR_L4S_INDICATION_LEN 255
 typedef struct ogs_nas_ecn_marking_for_l4s_indication_s {
     uint8_t length;
-    void *buffer;
+    uint8_t value[OGS_NAS_MAX_ECN_MARKING_FOR_L4S_INDICATION_LEN];
 } __attribute__ ((packed)) ogs_nas_ecn_marking_for_l4s_indication_t;
 
 /* 9.11.4.41 Non-3GPP device information
@@ -1364,7 +1373,7 @@ typedef struct ogs_nas_ecn_marking_for_l4s_indication_s {
 typedef struct ogs_nas_non_3gpp_device_information_s {
     uint16_t length;
     void *buffer;
-} __attribute__ ((packed)) ogs_nas_non_3gpp_device_information_t;
+} ogs_nas_non_3gpp_device_information_t;
 
 #ifdef __cplusplus
 }

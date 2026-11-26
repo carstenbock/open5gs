@@ -42,11 +42,15 @@ bool ausf_nudm_ueau_handle_get(ausf_ue_t *ausf_ue,
     ogs_sbi_response_t *response = NULL;
 
     char hxres_star_string[OGS_KEYSTRLEN(OGS_MAX_RES_LEN)];
+    uint8_t rand[OGS_RAND_LEN];
+    uint8_t xres_star[OGS_MAX_RES_LEN];
+    uint8_t kausf[OGS_SHA256_DIGEST_SIZE];
 
     OpenAPI_authentication_info_result_t *AuthenticationInfoResult = NULL;
     OpenAPI_authentication_vector_t *AuthenticationVector = NULL;
     OpenAPI_ue_authentication_ctx_t UeAuthenticationCtx;
-    OpenAPI_ue_authentication_ctx_5g_auth_data_t AV5G_AKA;
+    OpenAPI_ue_authentication_ctx_5g_auth_data_t AuthData;
+    OpenAPI_av5g_aka_t AV5G_AKA;
     OpenAPI_map_t *LinksValueScheme = NULL;
     OpenAPI_links_value_schema_t LinksValueSchemeValue;
 
@@ -158,12 +162,28 @@ bool ausf_nudm_ueau_handle_get(ausf_ue_t *ausf_ue,
         return false;
     }
 
-    if (!AuthenticationInfoResult->supi) {
-        ogs_error("[%s] No AuthenticationVector.supi", ausf_ue->suci);
+    if (ogs_supi_is_valid(AuthenticationInfoResult->supi) == false) {
+        ogs_error("[%s] Invalid AuthenticationInfoResult.supi", ausf_ue->suci);
         ogs_assert(true ==
             ogs_sbi_server_send_error(stream,
                 OGS_SBI_HTTP_STATUS_BAD_REQUEST,
-                recvmsg, "No AuthenticationVector.supi", ausf_ue->suci,
+                recvmsg, "Invalid AuthenticationInfoResult.supi",
+                ausf_ue->suci, NULL));
+        return false;
+    }
+
+    if (ogs_hex_from_string_checked(
+                AuthenticationVector->rand, rand, sizeof(rand)) != OGS_OK ||
+        ogs_hex_from_string_checked(
+                AuthenticationVector->xres_star,
+                xres_star, sizeof(xres_star)) != OGS_OK ||
+        ogs_hex_from_string_checked(
+                AuthenticationVector->kausf, kausf, sizeof(kausf)) != OGS_OK) {
+        ogs_error("[%s] Invalid AuthenticationVector", ausf_ue->suci);
+        ogs_assert(true ==
+            ogs_sbi_server_send_error(stream,
+                OGS_SBI_HTTP_STATUS_BAD_REQUEST,
+                recvmsg, "Invalid AuthenticationVector", ausf_ue->suci,
                 NULL));
         return false;
     }
@@ -179,20 +199,13 @@ bool ausf_nudm_ueau_handle_get(ausf_ue_t *ausf_ue,
     ogs_hash_set(ausf_self()->supi_hash,
             ausf_ue->supi, strlen(ausf_ue->supi), ausf_ue);
 
+    /* A new vector supersedes the result of the previous challenge. */
+    ausf_ue->auth_result = OpenAPI_auth_result_AUTHENTICATION_ONGOING;
     ausf_ue->auth_type = AuthenticationInfoResult->auth_type;
 
-    ogs_ascii_to_hex(
-        AuthenticationVector->rand,
-        strlen(AuthenticationVector->rand),
-        ausf_ue->rand, sizeof(ausf_ue->rand));
-    ogs_ascii_to_hex(
-        AuthenticationVector->xres_star,
-        strlen(AuthenticationVector->xres_star),
-        ausf_ue->xres_star, sizeof(ausf_ue->xres_star));
-    ogs_ascii_to_hex(
-        AuthenticationVector->kausf,
-        strlen(AuthenticationVector->kausf),
-        ausf_ue->kausf, sizeof(ausf_ue->kausf));
+    memcpy(ausf_ue->rand, rand, sizeof(ausf_ue->rand));
+    memcpy(ausf_ue->xres_star, xres_star, sizeof(ausf_ue->xres_star));
+    memcpy(ausf_ue->kausf, kausf, sizeof(ausf_ue->kausf));
 
     memset(&UeAuthenticationCtx, 0, sizeof(UeAuthenticationCtx));
 
@@ -208,7 +221,9 @@ bool ausf_nudm_ueau_handle_get(ausf_ue_t *ausf_ue,
             hxres_star_string, sizeof(hxres_star_string));
     AV5G_AKA.hxres_star = hxres_star_string;
 
-    UeAuthenticationCtx._5g_auth_data = &AV5G_AKA;
+    memset(&AuthData, 0, sizeof(AuthData));
+    AuthData.av5g_aka = &AV5G_AKA;
+    UeAuthenticationCtx._5g_auth_data = &AuthData;
 
     memset(&LinksValueSchemeValue, 0, sizeof(LinksValueSchemeValue));
 
@@ -277,7 +292,8 @@ bool ausf_nudm_ueau_handle_auth_removal_ind(ausf_ue_t *ausf_ue,
 }
 
 bool ausf_nudm_ueau_handle_result_confirmation_inform(ausf_ue_t *ausf_ue,
-        ogs_sbi_stream_t *stream, ogs_sbi_message_t *recvmsg)
+        ogs_sbi_stream_t *stream, ogs_sbi_message_t *recvmsg,
+        OpenAPI_auth_result_e result)
 {
     ogs_sbi_message_t sendmsg;
     ogs_sbi_response_t *response = NULL;
@@ -316,6 +332,18 @@ bool ausf_nudm_ueau_handle_result_confirmation_inform(ausf_ue_t *ausf_ue,
         return false;
     }
 
+    memset(&ConfirmationDataResponse, 0, sizeof(ConfirmationDataResponse));
+    /* Use the result sent in this transaction. A retry may have already
+     * changed the UE context while the UDM response was in flight. */
+    if (result != OpenAPI_auth_result_AUTHENTICATION_SUCCESS ||
+            !AuthEvent->success ||
+            ausf_ue->auth_result != OpenAPI_auth_result_AUTHENTICATION_SUCCESS) {
+        /* A failed confirmation has no key or auth-event URI to retain. */
+        ConfirmationDataResponse.auth_result =
+            OpenAPI_auth_result_AUTHENTICATION_FAILURE;
+        goto send_response;
+    }
+
     rc = ogs_sbi_getaddr_from_uri(
             &scheme, &fqdn, &fqdn_port, &addr, &addr6, recvmsg->http.location);
     if (rc == false || scheme == OpenAPI_uri_scheme_NULL) {
@@ -344,22 +372,18 @@ bool ausf_nudm_ueau_handle_result_confirmation_inform(ausf_ue_t *ausf_ue,
 
     AUTH_EVENT_STORE(ausf_ue, recvmsg->http.location);
 
-    memset(&ConfirmationDataResponse, 0, sizeof(ConfirmationDataResponse));
-
-    if (AuthEvent->success == true)
-        ausf_ue->auth_result = OpenAPI_auth_result_AUTHENTICATION_SUCCESS;
-    else
-        ausf_ue->auth_result = OpenAPI_auth_result_AUTHENTICATION_FAILURE;
-
-    ConfirmationDataResponse.auth_result = ausf_ue->auth_result;
+    ConfirmationDataResponse.auth_result =
+        OpenAPI_auth_result_AUTHENTICATION_SUCCESS;
+    /* TS 33.501 6.1.3.2.0: disclose SUPI and Kseaf only after RES*
+     * matches XRES*. */
     ConfirmationDataResponse.supi = ausf_ue->supi;
-
     ogs_kdf_kseaf(ausf_ue->serving_network_name,
             ausf_ue->kausf, ausf_ue->kseaf);
     ogs_hex_to_ascii(ausf_ue->kseaf, sizeof(ausf_ue->kseaf),
             kseaf_string, sizeof(kseaf_string));
     ConfirmationDataResponse.kseaf = kseaf_string;
 
+send_response:
     memset(&sendmsg, 0, sizeof(sendmsg));
 
     sendmsg.ConfirmationDataResponse = &ConfirmationDataResponse;

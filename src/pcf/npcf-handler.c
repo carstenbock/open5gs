@@ -57,6 +57,66 @@ static uint8_t pcf_qos_index_from_media(
     }
 }
 
+/* Keep the ARP requested by the AF in the media component */
+static void pcf_media_arp_from_af(ogs_media_component_t *media_component,
+        OpenAPI_reserv_priority_e res_prio,
+        OpenAPI_preemption_capability_e preempt_cap,
+        OpenAPI_preemption_vulnerability_e preempt_vuln)
+{
+    ogs_assert(media_component);
+
+    if (res_prio > OpenAPI_reserv_priority_NULL &&
+        res_prio <= OpenAPI_reserv_priority_PRIO_16) {
+        media_component->arp.priority_level =
+            pcf_self()->arp_priority_level[res_prio];
+        if (!media_component->arp.priority_level)
+            ogs_warn("resPrio[%s] is not mapped - "
+                    "check PCF reservation_priorities config",
+                    OpenAPI_reserv_priority_ToString(res_prio));
+    }
+
+    if (preempt_cap == OpenAPI_preemption_capability_MAY_PREEMPT)
+        media_component->arp.pre_emption_capability =
+            OGS_5GC_PRE_EMPTION_ENABLED;
+    else if (preempt_cap == OpenAPI_preemption_capability_NOT_PREEMPT)
+        media_component->arp.pre_emption_capability =
+            OGS_5GC_PRE_EMPTION_DISABLED;
+
+    if (preempt_vuln == OpenAPI_preemption_vulnerability_PREEMPTABLE)
+        media_component->arp.pre_emption_vulnerability =
+            OGS_5GC_PRE_EMPTION_ENABLED;
+    else if (preempt_vuln == OpenAPI_preemption_vulnerability_NOT_PREEMPTABLE)
+        media_component->arp.pre_emption_vulnerability =
+            OGS_5GC_PRE_EMPTION_DISABLED;
+}
+
+/*
+ * Media component that carries ARP and neither bandwidth, flow status
+ * nor sub components. Field presence is checked on the parsed model,
+ * so an unmapped resPrio or "0 bps" is still recognized correctly.
+ */
+static bool pcf_media_is_arp_only(OpenAPI_media_component_rm_t *media)
+{
+    ogs_assert(media);
+
+    if (media->res_prio == OpenAPI_reserv_priority_NULL &&
+        media->preempt_cap == OpenAPI_preemption_capability_NULL &&
+        media->preempt_vuln == OpenAPI_preemption_vulnerability_NULL)
+        return false;
+
+    if (media->mar_bw_dl || media->is_mar_bw_dl_null ||
+        media->mar_bw_ul || media->is_mar_bw_ul_null ||
+        media->mir_bw_dl || media->is_mir_bw_dl_null ||
+        media->mir_bw_ul || media->is_mir_bw_ul_null ||
+        media->rr_bw || media->is_rr_bw_null ||
+        media->rs_bw || media->is_rs_bw_null ||
+        media->f_status != OpenAPI_flow_status_NULL ||
+        media->med_sub_comps)
+        return false;
+
+    return true;
+}
+
 bool pcf_npcf_am_policy_control_handle_create(pcf_ue_am_t *pcf_ue_am,
         ogs_sbi_stream_t *stream, ogs_sbi_message_t *message)
 {
@@ -175,7 +235,14 @@ bool pcf_npcf_am_policy_control_handle_create(pcf_ue_am_t *pcf_ue_am,
     Guami = PolicyAssociationRequest->guami;
     if (Guami && Guami->amf_id &&
         Guami->plmn_id && Guami->plmn_id->mnc && Guami->plmn_id->mcc) {
-        ogs_sbi_parse_guami(&pcf_ue_am->guami, PolicyAssociationRequest->guami);
+        if (!ogs_sbi_parse_guami(
+                &pcf_ue_am->guami, PolicyAssociationRequest->guami)) {
+            ogs_error("[%s] Invalid GUAMI", pcf_ue_am->supi);
+            ogs_assert(true ==
+                ogs_sbi_server_send_error(stream, OGS_SBI_HTTP_STATUS_BAD_REQUEST,
+                    message, "Invalid GUAMI", pcf_ue_am->supi, NULL));
+            return false;
+        }
     }
 
     OpenAPI_list_for_each(PolicyAssociationRequest->allowed_snssais, node) {
@@ -292,9 +359,11 @@ bool pcf_npcf_smpolicycontrol_handle_create(pcf_sess_t *sess,
         goto cleanup;
     }
 
-    if (!SmPolicyContextData->pdu_session_id) {
-        strerror = ogs_msprintf("[%s:%d] No pduSessionId",
-                pcf_ue_sm->supi, sess->psi);
+    if (ogs_pdu_session_id_is_valid(
+            SmPolicyContextData->pdu_session_id) == false) {
+        strerror = ogs_msprintf("[%s:%d] Invalid pduSessionId [%d]",
+                pcf_ue_sm->supi, sess->psi,
+                SmPolicyContextData->pdu_session_id);
         status = OGS_SBI_HTTP_STATUS_BAD_REQUEST;
         goto cleanup;
     }
@@ -623,7 +692,8 @@ bool pcf_npcf_smpolicycontrol_handle_delete(pcf_sess_t *sess,
     }
 
     ogs_list_for_each(&sess->app_list, app_session) {
-        pcf_sbi_send_policyauthorization_terminate_notify(app_session);
+        pcf_sbi_send_policyauthorization_terminate_notify(app_session,
+                OpenAPI_termination_cause_PDU_SESSION_TERMINATION);
     }
 
     if (pcf_sessions_number_by_snssai_and_dnn(
@@ -661,6 +731,7 @@ bool pcf_npcf_policyauthorization_handle_create(pcf_sess_t *sess,
     bool rc;
     int i, j, rv, status = 0;
     char *strerror = NULL;
+    const char *cause = NULL;
     pcf_ue_sm_t *pcf_ue_sm = NULL;
     pcf_app_t *app_session = NULL;
 
@@ -674,6 +745,7 @@ bool pcf_npcf_policyauthorization_handle_create(pcf_sess_t *sess,
     OpenAPI_app_session_context_req_data_t *AscReqData = NULL;
 
     uint64_t supported_features = 0;
+    uint64_t negotiated_features = 0;
 
     ogs_sbi_server_t *server = NULL;
     ogs_sbi_header_t header;
@@ -698,6 +770,8 @@ bool pcf_npcf_policyauthorization_handle_create(pcf_sess_t *sess,
     OpenAPI_list_t *fDescList = NULL;
 
     OpenAPI_sm_policy_decision_t SmPolicyDecision;
+    bool pcc_rule_updated[OGS_MAX_NUM_OF_PCC_RULE] = {0};
+    bool pcc_rule_flow_presence[OGS_MAX_NUM_OF_PCC_RULE] = {0};
 
     OpenAPI_list_t *PccRuleList = NULL;
     OpenAPI_map_t *PccRuleMap = NULL;
@@ -768,12 +842,18 @@ bool pcf_npcf_policyauthorization_handle_create(pcf_sess_t *sess,
 
     supported_features = ogs_uint64_from_string_hexadecimal(
             AscReqData->supp_feat);
-    sess->policyauthorization_features &= supported_features;
 
-    if (sess->policyauthorization_features != supported_features) {
+    /*
+     * Negotiate features for each application session. Do not narrow the
+     * PCF's supported feature set for subsequent AF requests.
+     */
+    negotiated_features =
+        sess->policyauthorization_features & supported_features;
+
+    if (negotiated_features != supported_features) {
         ogs_free(AscReqData->supp_feat);
         AscReqData->supp_feat =
-            ogs_uint64_to_string(sess->policyauthorization_features);
+            ogs_uint64_to_string(negotiated_features);
         ogs_assert(AscReqData->supp_feat);
     }
 
@@ -800,6 +880,10 @@ bool pcf_npcf_policyauthorization_handle_create(pcf_sess_t *sess,
                 media_component->media_component_number =
                     MediaComponent->med_comp_n;
                 media_component->media_type = MediaComponent->med_type;
+                pcf_media_arp_from_af(media_component,
+                        MediaComponent->res_prio,
+                        MediaComponent->preempt_cap,
+                        MediaComponent->preempt_vuln);
                 if (MediaComponent->mar_bw_dl)
                     media_component->max_requested_bandwidth_dl =
                         ogs_sbi_bitrate_from_string(MediaComponent->mar_bw_dl);
@@ -871,7 +955,16 @@ bool pcf_npcf_policyauthorization_handle_create(pcf_sess_t *sess,
     }
 
     app_session = pcf_app_add(sess);
-    ogs_assert(app_session);
+    if (!app_session) {
+        strerror = ogs_msprintf("[%s:%d] Cannot allocate PCF app session",
+                pcf_ue_sm->supi, sess->psi);
+        status = OGS_SBI_HTTP_STATUS_INTERNAL_SERVER_ERROR;
+        cause = "INSUFFICIENT_RESOURCES";
+        ogs_free(fqdn);
+        ogs_freeaddrinfo(addr);
+        ogs_freeaddrinfo(addr6);
+        goto cleanup;
+    }
 
     if (app_session->notif_uri)
         ogs_free(app_session->notif_uri);
@@ -924,6 +1017,12 @@ bool pcf_npcf_policyauthorization_handle_create(pcf_sess_t *sess,
         ogs_media_component_t *media_component = &ims_data.media_component[i];
         const char *reference = qos_reference[i];
         const char *err_str = NULL;
+
+        if (ogs_media_is_signalling_path_status(media_component)) {
+            ogs_info("[%s:%d] AF subscribed to Signalling Path Status",
+                    pcf_ue_sm->supi, sess->psi);
+            continue;
+        }
 
         qos_index = pcf_qos_index_from_media(
                 reference, media_component->media_type, &err_str);
@@ -981,6 +1080,13 @@ bool pcf_npcf_policyauthorization_handle_create(pcf_sess_t *sess,
         }
 
         if (!pcc_rule) {
+            if (app_session->num_of_pcc_rule >= OGS_MAX_NUM_OF_PCC_RULE) {
+                strerror = ogs_msprintf("[%s:%d] Too many PCC rules",
+                        pcf_ue_sm->supi, sess->psi);
+                status = OGS_SBI_HTTP_STATUS_FORBIDDEN;
+                goto cleanup;
+            }
+
             pcc_rule = &app_session->pcc_rule[app_session->num_of_pcc_rule];
             ogs_assert(pcc_rule);
 
@@ -1052,10 +1158,29 @@ bool pcf_npcf_policyauthorization_handle_create(pcf_sess_t *sess,
         if (pcc_rule->qos.gbr.uplink == 0)
             pcc_rule->qos.gbr.uplink = db_pcc_rule->qos.gbr.uplink;
 
-        /**************************************************************
-         * Build PCC Rule & QoS Decision
-         *************************************************************/
-        PccRule = ogs_sbi_build_pcc_rule(pcc_rule, flow_presence);
+        /* Update ARP */
+        if (ogs_pcc_rule_update_arp_from_media(pcc_rule, media_component))
+            ogs_info("[%s:%d] PCC Rule[%s] ARP[%d:%d:%d] updated by AF",
+                    pcf_ue_sm->supi, sess->psi, pcc_rule->id,
+                    pcc_rule->qos.arp.priority_level,
+                    pcc_rule->qos.arp.pre_emption_capability,
+                    pcc_rule->qos.arp.pre_emption_vulnerability);
+
+        j = pcc_rule - app_session->pcc_rule;
+        pcc_rule_updated[j] = true;
+        pcc_rule_flow_presence[j] |= (flow_presence != 0);
+    }
+
+    /* Emit each updated rule once, after all media components are applied.
+     * Keep flow information if any component changed the rule's flows. */
+    for (i = 0; i < app_session->num_of_pcc_rule; i++) {
+        ogs_pcc_rule_t *pcc_rule = &app_session->pcc_rule[i];
+
+        if (!pcc_rule_updated[i])
+            continue;
+
+        PccRule = ogs_sbi_build_pcc_rule(
+                pcc_rule, pcc_rule_flow_presence[i]);
         ogs_assert(PccRule->pcc_rule_id);
 
         PccRuleMap = OpenAPI_map_create(PccRule->pcc_rule_id, PccRule);
@@ -1090,6 +1215,22 @@ bool pcf_npcf_policyauthorization_handle_create(pcf_sess_t *sess,
     header.resource.component[1] = (char *)app_session->app_session_id;
     sendmsg.http.location = ogs_sbi_server_uri(server, &header);
     ogs_assert(sendmsg.http.location);
+
+    /*
+     * TS 29.514 requires the negotiated features in ascRespData.suppFeat.
+     * Keep the existing ascReqData.suppFeat echo for older AF clients.
+     * The new response data is owned and freed by recvmsg.
+     */
+    if (AppSessionContext->asc_resp_data)
+        OpenAPI_app_session_context_resp_data_free(
+                AppSessionContext->asc_resp_data);
+
+    AppSessionContext->asc_resp_data =
+        OpenAPI_app_session_context_resp_data_create(
+                OpenAPI_serv_auth_info_NULL, NULL, NULL,
+                ogs_uint64_to_string(negotiated_features));
+    ogs_assert(AppSessionContext->asc_resp_data);
+    ogs_assert(AppSessionContext->asc_resp_data->supp_feat);
 
     sendmsg.AppSessionContext = recvmsg->AppSessionContext;
 
@@ -1144,7 +1285,7 @@ cleanup:
                 OGS_LOG_WARN : OGS_LOG_ERROR, 0, "%s", strerror);
     ogs_assert(true ==
         ogs_sbi_server_send_error(stream, status, recvmsg, strerror, NULL,
-                NULL));
+                cause));
     ogs_free(strerror);
 
     OpenAPI_list_for_each(PccRuleList, node) {
@@ -1199,6 +1340,7 @@ bool pcf_npcf_policyauthorization_handle_update(
     ogs_media_component_t *media_component = NULL;
     ogs_media_sub_component_t *sub = NULL;
     const char *qos_reference[OGS_MAX_NUM_OF_MEDIA_COMPONENT] = {0};
+    bool arp_only[OGS_MAX_NUM_OF_MEDIA_COMPONENT] = {0};
 
     OpenAPI_list_t *MediaComponentList = NULL;
     OpenAPI_map_t *MediaComponentMap = NULL;
@@ -1211,6 +1353,8 @@ bool pcf_npcf_policyauthorization_handle_update(
     OpenAPI_list_t *fDescList = NULL;
 
     OpenAPI_sm_policy_decision_t SmPolicyDecision;
+    bool pcc_rule_updated[OGS_MAX_NUM_OF_PCC_RULE] = {0};
+    bool pcc_rule_flow_presence[OGS_MAX_NUM_OF_PCC_RULE] = {0};
 
     OpenAPI_list_t *PccRuleList = NULL;
     OpenAPI_map_t *PccRuleMap = NULL;
@@ -1275,9 +1419,14 @@ bool pcf_npcf_policyauthorization_handle_update(
 
                 media_component = &ims_data.media_component[n];
                 qos_reference[n] = MediaComponent->qos_reference;
+                arp_only[n] = pcf_media_is_arp_only(MediaComponent);
                 media_component->media_component_number =
                     MediaComponent->med_comp_n;
                 media_component->media_type = MediaComponent->med_type;
+                pcf_media_arp_from_af(media_component,
+                        MediaComponent->res_prio,
+                        MediaComponent->preempt_cap,
+                        MediaComponent->preempt_vuln);
                 if (MediaComponent->mar_bw_dl)
                     media_component->max_requested_bandwidth_dl =
                         ogs_sbi_bitrate_from_string(MediaComponent->mar_bw_dl);
@@ -1377,6 +1526,12 @@ bool pcf_npcf_policyauthorization_handle_update(
         const char *reference = qos_reference[i];
         const char *err_str = NULL;
 
+        if (ogs_media_is_signalling_path_status(media_component)) {
+            ogs_info("[%s:%d] AF subscribed to Signalling Path Status",
+                    pcf_ue_sm->supi, sess->psi);
+            continue;
+        }
+
         qos_index = pcf_qos_index_from_media(
                 reference, media_component->media_type, &err_str);
         if (qos_index == 0) {
@@ -1433,10 +1588,18 @@ bool pcf_npcf_policyauthorization_handle_update(
         }
 
         if (!pcc_rule) {
+            if (app_session->num_of_pcc_rule >= OGS_MAX_NUM_OF_PCC_RULE) {
+                strerror = ogs_msprintf("[%s:%d] Too many PCC rules",
+                        pcf_ue_sm->supi, sess->psi);
+                status = OGS_SBI_HTTP_STATUS_FORBIDDEN;
+                goto cleanup;
+            }
+
             pcc_rule = &app_session->pcc_rule[app_session->num_of_pcc_rule];
             ogs_assert(pcc_rule);
 
-            pcc_rule->id = ogs_strdup(app_session->app_session_id);
+            pcc_rule->id = ogs_msprintf("%s-a%s",
+                            db_pcc_rule->id, app_session->app_session_id);
             ogs_assert(pcc_rule->id);
 
             memcpy(&pcc_rule->qos, &db_pcc_rule->qos, sizeof(ogs_qos_t));
@@ -1484,29 +1647,54 @@ bool pcf_npcf_policyauthorization_handle_update(
             }
         }
 
-        /* Update QoS */
-        rv = ogs_pcc_rule_update_qos_from_media(pcc_rule, media_component);
-        if (rv != OGS_OK) {
-            strerror = ogs_msprintf("[%s:%d] update_qos() failed",
-                pcf_ue_sm->supi, sess->psi);
-            status = OGS_SBI_HTTP_STATUS_FORBIDDEN;
-            goto cleanup;
+        /*
+         * An update carrying only ARP keeps the bitrates negotiated so far.
+         * Otherwise the QoS is recomputed from the media component.
+         */
+        if (!arp_only[i]) {
+            /* Update QoS */
+            rv = ogs_pcc_rule_update_qos_from_media(pcc_rule, media_component);
+            if (rv != OGS_OK) {
+                strerror = ogs_msprintf("[%s:%d] update_qos() failed",
+                    pcf_ue_sm->supi, sess->psi);
+                status = OGS_SBI_HTTP_STATUS_FORBIDDEN;
+                goto cleanup;
+            }
+
+            /* if we failed to get QoS from IMS, apply WEBUI QoS */
+            if (pcc_rule->qos.mbr.downlink == 0)
+                pcc_rule->qos.mbr.downlink = db_pcc_rule->qos.mbr.downlink;
+            if (pcc_rule->qos.mbr.uplink == 0)
+                pcc_rule->qos.mbr.uplink = db_pcc_rule->qos.mbr.uplink;
+            if (pcc_rule->qos.gbr.downlink == 0)
+                pcc_rule->qos.gbr.downlink = db_pcc_rule->qos.gbr.downlink;
+            if (pcc_rule->qos.gbr.uplink == 0)
+                pcc_rule->qos.gbr.uplink = db_pcc_rule->qos.gbr.uplink;
         }
 
-        /* if we failed to get QoS from IMS, apply WEBUI QoS */
-        if (pcc_rule->qos.mbr.downlink == 0)
-            pcc_rule->qos.mbr.downlink = db_pcc_rule->qos.mbr.downlink;
-        if (pcc_rule->qos.mbr.uplink == 0)
-            pcc_rule->qos.mbr.uplink = db_pcc_rule->qos.mbr.uplink;
-        if (pcc_rule->qos.gbr.downlink == 0)
-            pcc_rule->qos.gbr.downlink = db_pcc_rule->qos.gbr.downlink;
-        if (pcc_rule->qos.gbr.uplink == 0)
-            pcc_rule->qos.gbr.uplink = db_pcc_rule->qos.gbr.uplink;
+        /* Update ARP */
+        if (ogs_pcc_rule_update_arp_from_media(pcc_rule, media_component))
+            ogs_info("[%s:%d] PCC Rule[%s] ARP[%d:%d:%d] updated by AF",
+                    pcf_ue_sm->supi, sess->psi, pcc_rule->id,
+                    pcc_rule->qos.arp.priority_level,
+                    pcc_rule->qos.arp.pre_emption_capability,
+                    pcc_rule->qos.arp.pre_emption_vulnerability);
 
-        /**************************************************************
-         * Build PCC Rule & QoS Decision
-         *************************************************************/
-        PccRule = ogs_sbi_build_pcc_rule(pcc_rule, flow_presence);
+        j = pcc_rule - app_session->pcc_rule;
+        pcc_rule_updated[j] = true;
+        pcc_rule_flow_presence[j] |= (flow_presence != 0);
+    }
+
+    /* Emit each updated rule once, after all media components are applied.
+     * Keep flow information if any component changed the rule's flows. */
+    for (i = 0; i < app_session->num_of_pcc_rule; i++) {
+        ogs_pcc_rule_t *pcc_rule = &app_session->pcc_rule[i];
+
+        if (!pcc_rule_updated[i])
+            continue;
+
+        PccRule = ogs_sbi_build_pcc_rule(
+                pcc_rule, pcc_rule_flow_presence[i]);
         ogs_assert(PccRule->pcc_rule_id);
 
         PccRuleMap = OpenAPI_map_create(PccRule->pcc_rule_id, PccRule);
@@ -1613,6 +1801,7 @@ bool pcf_npcf_policyauthorization_handle_delete(
         ogs_sbi_stream_t *stream, ogs_sbi_message_t *recvmsg)
 {
     int i;
+    bool rc = true;
 
     OpenAPI_sm_policy_decision_t SmPolicyDecision;
 
@@ -1623,8 +1812,6 @@ bool pcf_npcf_policyauthorization_handle_delete(
     OpenAPI_map_t *QosDecisionMap = NULL;
 
     OpenAPI_lnode_t *node = NULL;
-
-    ogs_assert(true == ogs_sbi_send_http_status_no_content(stream));
 
     ogs_assert(app_session);
 
@@ -1658,12 +1845,9 @@ bool pcf_npcf_policyauthorization_handle_delete(
     if (QosDecisionList->count)
         SmPolicyDecision.qos_decs = QosDecisionList;
 
-    if (PccRuleList->count || QosDecisionList->count) {
-        ogs_assert(true == pcf_sbi_send_smpolicycontrol_delete_notify(
-                            sess, app_session, &SmPolicyDecision));
-    } else {
-        pcf_app_remove(app_session);
-    }
+    if (PccRuleList->count || QosDecisionList->count)
+        rc = pcf_sbi_send_smpolicycontrol_update_notify(
+                sess, &SmPolicyDecision);
 
     OpenAPI_list_for_each(PccRuleList, node) {
         PccRuleMap = node->data;
@@ -1680,6 +1864,20 @@ bool pcf_npcf_policyauthorization_handle_delete(
         }
     }
     OpenAPI_list_free(QosDecisionList);
+
+    if (!rc) {
+        ogs_assert(true == ogs_sbi_server_send_error(stream,
+                    OGS_SBI_HTTP_STATUS_INTERNAL_SERVER_ERROR, recvmsg,
+                    "Cannot send SM policy update notification", NULL, NULL));
+        return false;
+    }
+
+    /*
+     * The SMF response does not need the app session.
+     * Remove it now so that a repeated delete gets 404.
+     */
+    pcf_app_remove(app_session);
+    ogs_assert(true == ogs_sbi_send_http_status_no_content(stream));
 
     return true;
 }

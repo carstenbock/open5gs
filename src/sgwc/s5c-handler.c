@@ -55,9 +55,31 @@ static void bearer_timeout(ogs_gtp_xact_t *xact, void *data)
     case OGS_GTP2_DELETE_BEARER_REQUEST_TYPE:
         ogs_error("[%s] No Delete Bearer Response", sgwc_ue->imsi_bcd);
         ogs_info("    bearer[EBI=%d]", bearer->ebi);
-        ogs_assert(OGS_OK ==
-            sgwc_pfcp_send_bearer_modification_request(
-                bearer, OGS_INVALID_POOL_ID, NULL, OGS_PFCP_MODIFY_REMOVE));
+        /*
+         * The MME did not answer the relayed (PGW-initiated) Delete Bearer
+         * Request. The local state still has to be cleaned up, but the
+         * cleanup must match what the PGW asked for, exactly as in
+         * sgwc_s11_handle_delete_bearer_response():
+         *
+         * - Linked EPS Bearer ID (DEFAULT BEARER) : the whole PDN
+         *   connection is deleted, so delete the PFCP session.
+         * - EPS Bearer ID (DEDICATED BEARER) : remove that bearer only.
+         *
+         * Removing only the default bearer left an sgwc_sess_t with an
+         * empty bearer_list in sgwc_ue->sess_list. The next procedure
+         * walking that list - e.g. Release Access Bearers Request - then
+         * hit ogs_assert(ogs_list_count(&sess->bearer_list)) and aborted
+         * the SGW-C.
+         */
+        if (bearer == sgwc_default_bearer_in_sess(sess))
+            ogs_assert(OGS_OK ==
+                sgwc_pfcp_send_session_deletion_request(
+                    sess, OGS_INVALID_POOL_ID, NULL));
+        else
+            ogs_assert(OGS_OK ==
+                sgwc_pfcp_send_bearer_modification_request(
+                    bearer, OGS_INVALID_POOL_ID, NULL,
+                    OGS_PFCP_MODIFY_REMOVE));
         break;
     default:
         ogs_error("GTP Timeout : IMSI[%s] Message-Type[%d]",
@@ -174,6 +196,8 @@ void sgwc_s5c_handle_create_session_response(
     if (rsp->pgw_s5_s8_s2a_s2b_f_teid_for_pmip_based_interface_or_for_gtp_based_control_plane_interface.presence == 0) {
         ogs_error("No GTP TEID [Cause:%d]", session_cause);
         cause_value = OGS_GTP2_CAUSE_CONDITIONAL_IE_MISSING;
+    } else if (ogs_gtp2_f_teid_check(&rsp->pgw_s5_s8_s2a_s2b_f_teid_for_pmip_based_interface_or_for_gtp_based_control_plane_interface) != OGS_OK) {
+        cause_value = OGS_GTP2_CAUSE_MANDATORY_IE_INCORRECT;
     }
     if (rsp->pdn_address_allocation.presence == 0) {
         ogs_error("No PDN Address Allocation [Cause:%d]", session_cause);
@@ -299,6 +323,15 @@ void sgwc_s5c_handle_create_session_response(
             ul_tunnel->local_teid, ul_tunnel->remote_teid);
 
         /* Receive Data Plane(UL) : PGW-S5U */
+        if (ogs_gtp2_f_teid_check(
+                &rsp->bearer_contexts_created[i].s5_s8_u_sgw_f_teid) !=
+                OGS_OK) {
+            ogs_gtp_send_error_message(
+                    s11_xact, sgwc_ue ? sgwc_ue->mme_s11_teid : 0,
+                    OGS_GTP2_CREATE_SESSION_RESPONSE_TYPE,
+                    OGS_GTP2_CAUSE_MANDATORY_IE_INCORRECT);
+            return;
+        }
         pgw_s5u_teid = rsp->bearer_contexts_created[i].s5_s8_u_sgw_f_teid.data;
         ogs_assert(pgw_s5u_teid);
         ul_tunnel->remote_teid = be32toh(pgw_s5u_teid->teid);
@@ -702,6 +735,9 @@ void sgwc_s5c_handle_create_bearer_request(
     if (req->bearer_contexts.s4_u_sgsn_f_teid.presence == 0) {
         ogs_error("No GTP TEID");
         cause_value = OGS_GTP2_CAUSE_CONDITIONAL_IE_MISSING;
+    } else if (ogs_gtp2_f_teid_check(
+                &req->bearer_contexts.s4_u_sgsn_f_teid) != OGS_OK) {
+        cause_value = OGS_GTP2_CAUSE_MANDATORY_IE_INCORRECT;
     }
 
     if (cause_value != OGS_GTP2_CAUSE_REQUEST_ACCEPTED) {

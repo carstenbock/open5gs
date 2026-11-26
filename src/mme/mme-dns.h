@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2024 by sysmocom - s.f.m.c. GmbH <info@sysmocom.de>
+ * Copyright (C) 2026 by Evgenii Grigorev <tothe8c@gmail.com>
  *
  * This file is part of Open5GS.
  *
@@ -17,85 +17,69 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
+/*
+ * Asynchronous DNS-based SGW/PGW selection (3GPP TS 29.303) for the MME.
+ *
+ * Active only when the `mme.dns` configuration section is present AND the
+ * MME was built with c-ares. Without either, every entry point below is an
+ * inert no-op and the static (configuration-file) gateway selection is
+ * used, byte-for-byte identical to previous behavior.
+ */
+
 #ifndef MME_DNS_H
 #define MME_DNS_H
 
-#include "ogs-proto.h"
+#include "mme-context.h"
+#include "mme-event.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-#define MME_DNS_MAX_FLAGS       16
-#define MME_DNS_MAX_SERVICES    256
-/* A DNS name is at most 255 octets (RFC 1035); +1 for the terminator. */
-#define MME_DNS_MAX_NAME        256
+/* Return values of mme_dns_prepare() */
+#define MME_DNS_SEND_NOW    0   /* proceed with CSR immediately */
+#define MME_DNS_DEFERRED    1   /* CSR will be sent on MME_EVENT_DNS_RESOLVED */
 
-/* A single parsed NAPTR record (subset relevant to S-NAPTR). */
-typedef struct mme_dns_naptr_s {
-    uint16_t    order;
-    uint16_t    preference;
-    char        flags[MME_DNS_MAX_FLAGS];
-    char        services[MME_DNS_MAX_SERVICES];
-    char        replacement[MME_DNS_MAX_NAME];
-    uint32_t    ttl;
-} mme_dns_naptr_t;
+#ifdef MME_HAVE_CARES
 
-/*
- * TS 29.303 DNS S-NAPTR based EPC node discovery (PGW S5/S8 selection).
- *
- * mme_dns_init()/mme_dns_final() set up the resolver state and the TTL cache.
- * They are safe to call even when discovery is disabled.
- */
-void mme_dns_init(void);
-void mme_dns_final(void);
+int mme_dns_open(void);
+void mme_dns_close(void);
+bool mme_dns_enabled(void);
 
-/*
- * Resolve the PGW GTP-C (S5/S8) address for the given APN network identifier
- * and the subscriber's HOME PLMN, following the S-NAPTR procedure of
- * TS 29.303 (NAPTR -> optional SRV -> A/AAAA) on the APN-FQDN
- *   <apn>.apn.epc.mnc<MNC>.mcc<MCC>.3gppnetwork.org
- *
- * On success returns OGS_OK and sets *sa_list to a newly-allocated address
- * list (mixed IPv4/IPv6, best candidate first). The caller owns the list and
- * MUST release it with ogs_freeaddrinfo().
- *
- * Returns OGS_ERROR when discovery is disabled, the inputs are invalid, or no
- * usable record could be resolved. Results (including failures) are cached
- * per FQDN with the DNS TTL so repeated attaches do not block on DNS.
- */
-int mme_dns_resolve_pgw(
-        const char *apn, const ogs_plmn_id_t *home_plmn,
-        ogs_sockaddr_t **sa_list);
+int mme_dns_prepare(enb_ue_t *enb_ue, mme_sess_t *sess, int create_action);
 
-/*
- * The following are pure, side-effect-free helpers exposed for unit testing
- * (see tests/unit/mme-dns-test.c). They do not depend on the resolver state
- * or the global MME context.
- */
+/* DNS-resolved PGW address for this session, or NULL */
+ogs_sockaddr_t *mme_dns_sess_pgw_addr(mme_sess_t *sess);
 
-/*
- * Return true if a NAPTR Service field selects a PGW for the given interface
- * mode (MME_PGW_DISCOVERY_IFACE_S8 / _S5 / _BOTH). Matching is
- * case-insensitive per RFC 3958.
- */
-bool mme_dns_service_matches(const char *services, int iface);
+/* Retry hooks: true = a next candidate was armed, caller must not fail
+ * the procedure */
+bool mme_dns_retry_on_csr_failure(mme_sess_t *sess);
+bool mme_dns_retry_on_gtp_timeout(mme_sess_t *sess);
 
-/*
- * Build the TS 23.003 APN-FQDN
- *   <apn-NI>.apn.epc.mnc<MNC>.mcc<MCC>.3gppnetwork.org
- * for the subscriber's home PLMN. Returns OGS_OK on success.
- */
-int mme_dns_apn_fqdn(const char *apn, const ogs_plmn_id_t *home_plmn,
-        char *buf, size_t sz);
+/* MME_EVENT_DNS_RESOLVED handler body (called from mme-sm.c) */
+void mme_dns_handle_resolved(mme_event_t *e);
 
-/*
- * Parse a raw DNS NAPTR response message, keeping only records that match the
- * requested interface mode, sorted by NAPTR Order then Preference. Returns the
- * number of records written to 'out' (capped at 'max').
- */
-int mme_dns_parse_naptr(const unsigned char *answer, int answer_len,
-        int iface, mme_dns_naptr_t *out, int max);
+/* Called from mme_sess_remove() */
+void mme_dns_sess_clear(mme_sess_t *sess);
+
+#else /* !MME_HAVE_CARES */
+
+static inline int mme_dns_open(void) { return OGS_OK; }
+static inline void mme_dns_close(void) {}
+static inline bool mme_dns_enabled(void) { return false; }
+static inline int mme_dns_prepare(
+        enb_ue_t *enb_ue, mme_sess_t *sess, int create_action)
+{ return MME_DNS_SEND_NOW; }
+static inline ogs_sockaddr_t *mme_dns_sess_pgw_addr(mme_sess_t *sess)
+{ return NULL; }
+static inline bool mme_dns_retry_on_csr_failure(mme_sess_t *sess)
+{ return false; }
+static inline bool mme_dns_retry_on_gtp_timeout(mme_sess_t *sess)
+{ return false; }
+static inline void mme_dns_handle_resolved(mme_event_t *e) {}
+static inline void mme_dns_sess_clear(mme_sess_t *sess) {}
+
+#endif /* MME_HAVE_CARES */
 
 #ifdef __cplusplus
 }

@@ -25,6 +25,23 @@
 #include "mme-fd-path.h"
 #include "mme-sm.h"
 
+void mme_send_delete_session_or_update_location_request(
+        enb_ue_t *enb_ue, mme_ue_t *mme_ue)
+{
+    /* TS 23.401 5.3.2.1: authentication/NAS security (5a), optional
+     * EIR check (5b), old bearer deletion (7), then Update Location (8). */
+    if (mme_ue->nas_eps.type == MME_EPS_TYPE_ATTACH_REQUEST &&
+        mme_sess_count(mme_ue)) {
+        mme_ue->attach_session_delete_pending = true;
+        mme_gtp_send_delete_all_sessions(enb_ue, mme_ue,
+                OGS_GTP_DELETE_SEND_UPDATE_LOCATION_REQUEST);
+        if (mme_sess_count(mme_ue))
+            return;
+        mme_ue->attach_session_delete_pending = false;
+    }
+    mme_s6a_send_ulr(enb_ue, mme_ue, 0);
+}
+
 void mme_send_delete_session_or_detach(enb_ue_t *enb_ue, mme_ue_t *mme_ue)
 {
     int r, xact_count;
@@ -176,7 +193,8 @@ void mme_send_release_non_emergency_sessions(mme_ue_t *mme_ue)
                 mme_gtp_send_delete_session_request(enb_ue, sgw_ue, sess,
                     OGS_GTP_DELETE_SEND_DEACTIVATE_BEARER_CONTEXT_REQUEST));
         } else {
-            r = nas_eps_send_deactivate_bearer_context_request(bearer);
+            r = nas_eps_send_deactivate_bearer_context_request(bearer,
+                    OGS_NAS_ESM_CAUSE_REGULAR_DEACTIVATION);
             ogs_expect(r == OGS_OK);
             ogs_assert(r != OGS_ERROR);
         }
@@ -378,7 +396,15 @@ void mme_send_after_paging(mme_ue_t *mme_ue, bool failed)
                 mme_gtp_send_delete_bearer_response(
                     bearer, OGS_GTP2_CAUSE_UNABLE_TO_PAGE_UE));
         } else {
-            r = nas_eps_send_deactivate_bearer_context_request(bearer);
+            /*
+             * Use the NAS ESM cause carried across paging (stored when the
+             * Delete Bearer Request was received). This preserves
+             * "reactivation requested" for an ECM-IDLE UE so the (IMS) PDN
+             * connection is re-established after paging. See
+             * mme_s11_handle_delete_bearer_request().
+             */
+            r = nas_eps_send_deactivate_bearer_context_request(
+                    bearer, mme_ue->paging.esm_cause);
             ogs_expect(r == OGS_OK);
             ogs_assert(r != OGS_ERROR);
         }
@@ -551,12 +577,16 @@ void mme_send_tau_accept_and_check_release(enb_ue_t *enb_ue, mme_ue_t *mme_ue)
      * This ensures that the UE has acknowledged the new P-TMSI,
      * allowing the TAU procedure to complete successfully
      * and maintaining synchronization between the UE and the network.
+     *
+     * A pending GUTI also keeps the S1 connection, so that the UE can
+     * acknowledge it with TAU Complete.
      */
     ogs_info("[%s] TAU done (sgsap_connected=%d, next_ptmsi=%u)",
          mme_ue->imsi_bcd,
          MME_SGSAP_IS_CONNECTED(mme_ue),
          (unsigned)mme_ue->next.p_tmsi);
     if (!mme_ue->nas_eps.update.active_flag &&
+        !MME_NEXT_GUTI_IS_AVAILABLE(mme_ue) &&
         !MME_NEXT_P_TMSI_IS_AVAILABLE(mme_ue)) {
         enb_ue->relcause.group = S1AP_Cause_PR_nas;
         enb_ue->relcause.cause = S1AP_CauseNas_normal_release;

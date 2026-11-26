@@ -26,7 +26,7 @@ static amf_timer_cfg_t g_amf_timer_cfg[MAX_NUM_OF_AMF_TIMER] = {
 
     /* DEREGISTRATION REQUEST sent */
     [AMF_TIMER_T3522] =
-        { .have = true, .max_count = 4, .duration = ogs_time_from_sec(3) },
+        { .have = true, .max_count = 4, .duration = ogs_time_from_sec(6) },
 
     /* REGISTRATION ACCEPT sent */
     [AMF_TIMER_T3550] =
@@ -43,7 +43,7 @@ static amf_timer_cfg_t g_amf_timer_cfg[MAX_NUM_OF_AMF_TIMER] = {
 
     /* IDENTITY REQUEST sent */
     [AMF_TIMER_T3570] =
-        { .have = true, .max_count = 4, .duration = ogs_time_from_sec(3) },
+        { .have = true, .max_count = 4, .duration = ogs_time_from_sec(6) },
 
     [AMF_TIMER_NG_HOLDING] =
         { .have = true, .duration = ogs_time_from_sec(30) },
@@ -114,7 +114,9 @@ void amf_timer_ng_delayed_send(void *data)
 
     rv = ogs_queue_push(ogs_app()->queue, e);
     if (rv != OGS_OK) {
-        ogs_error("ogs_queue_push() failed:%d", (int)rv);
+        if (rv != OGS_DONE)
+            ogs_error("ogs_queue_push() failed:%d", (int)rv);
+        ogs_pkbuf_free(e->pkbuf);
         ogs_timer_delete(e->timer);
         ogs_event_free(e);
     }
@@ -135,8 +137,9 @@ static void gmm_timer_event_send(
 
     rv = ogs_queue_push(ogs_app()->queue, e);
     if (rv != OGS_OK) {
-        ogs_error("ogs_queue_push() failed:%d in %s",
-                (int)rv, amf_timer_get_name(timer_id));
+        if (rv != OGS_DONE)
+            ogs_error("ogs_queue_push() failed:%d in %s",
+                    (int)rv, amf_timer_get_name(timer_id));
         ogs_event_free(e);
     }
 }
@@ -181,7 +184,8 @@ void amf_timer_ng_holding_timer_expire(void *data)
 
     rv = ogs_queue_push(ogs_app()->queue, e);
     if (rv != OGS_OK) {
-        ogs_error("ogs_queue_push() failed:%d", (int)rv);
+        if (rv != OGS_DONE)
+            ogs_error("ogs_queue_push() failed:%d", (int)rv);
         ogs_event_free(e);
     }
 }

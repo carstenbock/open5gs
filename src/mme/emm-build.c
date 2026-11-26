@@ -82,10 +82,6 @@ ogs_pkbuf_t *emm_build_attach_accept(
     ogs_assert(esmbuf);
 
     memset(&message, 0, sizeof(message));
-    message.h.security_header_type =
-       OGS_NAS_SECURITY_HEADER_INTEGRITY_PROTECTED_AND_CIPHERED;
-    message.h.protocol_discriminator = OGS_NAS_PROTOCOL_DISCRIMINATOR_EMM;
-
     message.emm.h.protocol_discriminator = OGS_NAS_PROTOCOL_DISCRIMINATOR_EMM;
     message.emm.h.message_type = OGS_NAS_EPS_ATTACH_ACCEPT;
 
@@ -286,7 +282,19 @@ ogs_pkbuf_t *emm_build_attach_accept(
         ogs_debug("    P-TMSI: 0x%08x", tmsi->tmsi);
     }
 
-    pkbuf = nas_eps_security_encode(mme_ue, &message);
+    attach_accept->presencemask |=
+        OGS_NAS_EPS_ATTACH_ACCEPT_NETWORK_POLICY_PRESENT;
+    attach_accept->network_policy.type =
+            OGS_NAS_EPS_ATTACH_ACCEPT_NETWORK_POLICY_TYPE >> 4;
+    if (ogs_global_conf()->parameter.allow_unsecured_redirection == true) {
+        attach_accept->network_policy.
+            unsecured_redirection_to_geran_not_allowed = 0;
+    } else {
+        attach_accept->network_policy.
+            unsecured_redirection_to_geran_not_allowed = 1;
+    }
+
+    pkbuf = ogs_nas_eps_plain_encode(&message);
     ogs_pkbuf_free(esmbuf);
 
     return pkbuf;
@@ -397,10 +405,6 @@ ogs_pkbuf_t *emm_build_security_mode_command(mme_ue_t *mme_ue)
     ogs_assert(mme_ue);
 
     memset(&message, 0, sizeof(message));
-    message.h.security_header_type =
-       OGS_NAS_SECURITY_HEADER_INTEGRITY_PROTECTED_AND_NEW_SECURITY_CONTEXT;
-    message.h.protocol_discriminator = OGS_NAS_PROTOCOL_DISCRIMINATOR_EMM;
-
     message.emm.h.protocol_discriminator = OGS_NAS_PROTOCOL_DISCRIMINATOR_EMM;
     message.emm.h.message_type = OGS_NAS_EPS_SECURITY_MODE_COMMAND;
 
@@ -507,7 +511,7 @@ ogs_pkbuf_t *emm_build_security_mode_command(mme_ue_t *mme_ue)
     ogs_kdf_nas_eps(OGS_KDF_NAS_ENC_ALG, mme_ue->selected_enc_algorithm,
             mme_ue->kasme, mme_ue->knas_enc);
 
-    return nas_eps_security_encode(mme_ue, &message);
+    return ogs_nas_eps_plain_encode(&message);
 }
 
 ogs_pkbuf_t *emm_build_detach_request(mme_ue_t *mme_ue)
@@ -517,17 +521,13 @@ ogs_pkbuf_t *emm_build_detach_request(mme_ue_t *mme_ue)
     ogs_assert(mme_ue);
 
     memset(&message, 0, sizeof(message));
-    message.h.security_header_type =
-        OGS_NAS_SECURITY_HEADER_INTEGRITY_PROTECTED_AND_CIPHERED;
-    message.h.protocol_discriminator = OGS_NAS_PROTOCOL_DISCRIMINATOR_EMM;
-
     message.emm.h.protocol_discriminator = OGS_NAS_PROTOCOL_DISCRIMINATOR_EMM;
     message.emm.h.message_type = OGS_NAS_EPS_DETACH_REQUEST;
 
     message.emm.detach_request_to_ue.detach_type.value =
         mme_ue->nas_eps.detach.value;
 
-    return nas_eps_security_encode(mme_ue, &message);
+    return ogs_nas_eps_plain_encode(&message);
 }
 
 ogs_pkbuf_t *emm_build_detach_accept(mme_ue_t *mme_ue)
@@ -567,10 +567,6 @@ ogs_pkbuf_t *emm_build_tau_accept(mme_ue_t *mme_ue)
     ogs_assert(mme_ue);
 
     memset(&message, 0, sizeof(message));
-    message.h.security_header_type =
-        OGS_NAS_SECURITY_HEADER_INTEGRITY_PROTECTED_AND_CIPHERED;
-    message.h.protocol_discriminator = OGS_NAS_PROTOCOL_DISCRIMINATOR_EMM;
-
     message.emm.h.protocol_discriminator = OGS_NAS_PROTOCOL_DISCRIMINATOR_EMM;
     message.emm.h.message_type = OGS_NAS_EPS_TRACKING_AREA_UPDATE_ACCEPT;
 
@@ -732,7 +728,19 @@ ogs_pkbuf_t *emm_build_tau_accept(mme_ue_t *mme_ue)
             use_of_non_3gpp_emergency_numbers_permitted = 1;
     }
 
-    return nas_eps_security_encode(mme_ue, &message);
+    tau_accept->presencemask |=
+        OGS_NAS_EPS_TRACKING_AREA_UPDATE_ACCEPT_NETWORK_POLICY_PRESENT;
+    tau_accept->network_policy.type =
+        OGS_NAS_EPS_TRACKING_AREA_UPDATE_ACCEPT_NETWORK_POLICY_TYPE >> 4;
+    if (ogs_global_conf()->parameter.allow_unsecured_redirection == true) {
+        tau_accept->network_policy.
+            unsecured_redirection_to_geran_not_allowed = 0;
+    } else {
+        tau_accept->network_policy.
+            unsecured_redirection_to_geran_not_allowed = 1;
+    }
+
+    return ogs_nas_eps_plain_encode(&message);
 }
 
 ogs_pkbuf_t *emm_build_tau_reject(
@@ -817,6 +825,12 @@ ogs_pkbuf_t *emm_build_downlink_nas_transport(
 
     message.emm.h.protocol_discriminator = OGS_NAS_PROTOCOL_DISCRIMINATOR_EMM;
     message.emm.h.message_type = OGS_NAS_EPS_DOWNLINK_NAS_TRANSPORT;
+
+    if (length > sizeof(nas_message_container->buffer)) {
+        ogs_error("NAS message container too long [%d], max [%d]",
+                length, (int)sizeof(nas_message_container->buffer));
+        return NULL;
+    }
 
     nas_message_container->length = length;
     memcpy(nas_message_container->buffer, buffer, length);

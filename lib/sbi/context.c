@@ -143,8 +143,10 @@ static int ogs_sbi_context_validation(
 
     ogs_assert(context_initialized == 1);
 
-    /* If SMF is only used in 4G EPC, no SBI interface is required.  */
-    if (local && strcmp(local, "smf") != 0 && ogs_sbi_server_first() == NULL) {
+    /* If SMF is only used in 4G EPC, or the EIR only serves S13,
+     * no SBI interface is required. */
+    if (local && strcmp(local, "smf") != 0 && strcmp(local, "eir") != 0 &&
+            ogs_sbi_server_first() == NULL) {
         ogs_error("No %s.sbi.address: in '%s'", local, ogs_app()->file);
         return OGS_ERROR;
     }
@@ -162,6 +164,9 @@ static int ogs_sbi_context_validation(
                 /* Skip SCP */
             } else if (local && strcmp(local, "smf") == 0) {
                 /* Skip SMF since SMF can run 4G */
+            } else if (local && strcmp(local, "eir") == 0 &&
+                    ogs_sbi_server_first() == NULL) {
+                /* Skip EIR when it only serves S13 */
             } else {
                 if (NF_INSTANCE_CLIENT(self.nrf_instance) ||
                     NF_INSTANCE_CLIENT(self.scp_instance)) {
@@ -1247,6 +1252,11 @@ ogs_sbi_nf_instance_t *ogs_sbi_nf_instance_add(void)
     }
     memset(nf_instance, 0, sizeof(ogs_sbi_nf_instance_t));
 
+    nf_instance->pool_id = OGS_NEXT_ID(
+            nf_instance_pool.id, OGS_MIN_POOL_ID, OGS_MAX_POOL_ID);
+    ogs_hash_set(nf_instance_pool.id_hash,
+            &nf_instance->pool_id, sizeof(ogs_pool_id_t), nf_instance);
+
     nf_instance->time.heartbeat_interval =
             ogs_local_conf()->time.nf_instance.heartbeat_interval;
 
@@ -1383,6 +1393,8 @@ void ogs_sbi_nf_instance_remove(ogs_sbi_nf_instance_t *nf_instance)
     if (nf_instance->client)
         ogs_sbi_client_remove(nf_instance->client);
 
+    ogs_hash_set(nf_instance_pool.id_hash,
+            &nf_instance->pool_id, sizeof(ogs_pool_id_t), NULL);
     ogs_pool_free(&nf_instance_pool, nf_instance);
 }
 
@@ -1419,6 +1431,11 @@ ogs_sbi_nf_instance_t *ogs_sbi_nf_instance_find(char *id)
     }
 
     return nf_instance;
+}
+
+ogs_sbi_nf_instance_t *ogs_sbi_nf_instance_find_by_pool_id(ogs_pool_id_t id)
+{
+    return ogs_pool_find_by_id(&nf_instance_pool, id);
 }
 
 ogs_sbi_nf_instance_t *ogs_sbi_nf_instance_find_by_discovery_param(
@@ -2735,30 +2752,6 @@ void ogs_sbi_xact_remove(ogs_sbi_xact_t *xact)
         ogs_free(xact->target_apiroot);
 
     /*
-     * Detach from the originating stream's xact_list, if attached.
-     *
-     * Two paths reach here:
-     *
-     *   (a) Normal completion: a response arrived (or the send
-     *       failed early) and the NF calls ogs_sbi_xact_remove().
-     *       xact_detach() unlinks via the cached to_stream_list
-     *       head in O(1), no stream lookup needed.
-     *
-     *   (b) Stream close: stream_remove_xact_all() (or its MHD
-     *       counterpart) walks the stream's xact_list and calls
-     *       ogs_sbi_xact_remove() on each entry. This detach runs
-     *       first and unlinks the node before the for_each_safe
-     *       iterator advances; the iterator's cached "next" pointer
-     *       keeps the loop sound.
-     *
-     * Idempotent for transactions that never had an inbound stream
-     * (NRF discovery initiated by the NF itself, status
-     * notifications): to_stream_list stays NULL and the helper is
-     * a no-op.
-     */
-    ogs_sbi_server_detach_xact(xact);
-
-    /*
      * Release optional user context attached to the transaction.
      * The transaction owns this memory and is responsible for
      * freeing it when the transaction is destroyed.
@@ -2846,6 +2839,12 @@ ogs_sbi_subscription_data_t *ogs_sbi_subscription_data_add(void)
 
     memset(subscription_data, 0, sizeof(ogs_sbi_subscription_data_t));
 
+    subscription_data->pool_id = OGS_NEXT_ID(
+            subscription_data_pool.id, OGS_MIN_POOL_ID, OGS_MAX_POOL_ID);
+    ogs_hash_set(subscription_data_pool.id_hash,
+            &subscription_data->pool_id, sizeof(ogs_pool_id_t),
+            subscription_data);
+
     ogs_list_add(&ogs_sbi_self()->subscription_data_list, subscription_data);
 
     return subscription_data;
@@ -2906,6 +2905,8 @@ void ogs_sbi_subscription_data_remove(
     if (subscription_data->client)
         ogs_sbi_client_remove(subscription_data->client);
 
+    ogs_hash_set(subscription_data_pool.id_hash,
+            &subscription_data->pool_id, sizeof(ogs_pool_id_t), NULL);
     ogs_pool_free(&subscription_data_pool, subscription_data);
 }
 
@@ -3037,6 +3038,61 @@ ogs_sbi_subscription_data_t *ogs_sbi_subscription_data_find(char *id)
     }
 
     return subscription_data;
+}
+
+ogs_sbi_subscription_data_t *ogs_sbi_subscription_data_find_by_pool_id(
+        ogs_pool_id_t id)
+{
+    return ogs_pool_find_by_id(&subscription_data_pool, id);
+}
+
+bool ogs_sbi_nf_status_subscription_exists(
+        const char *req_nf_instance_id,
+        OpenAPI_nf_type_e nf_type,
+        OpenAPI_service_name_e service_name,
+        bool confirmed_only)
+{
+    ogs_sbi_subscription_data_t *subscription_data = NULL;
+    bool nf_type_present = (nf_type != OpenAPI_nf_type_NULL);
+    bool service_name_present = (service_name != OpenAPI_service_name_NULL);
+
+    ogs_assert(req_nf_instance_id);
+
+    ogs_list_for_each(
+            &ogs_sbi_self()->subscription_data_list, subscription_data) {
+        if (!subscription_data->req_nf_instance_id)
+            continue;
+
+        if (strcmp(subscription_data->req_nf_instance_id,
+                    req_nf_instance_id) != 0)
+            continue;
+
+        if (subscription_data->flags & OGS_SBI_SUBSCRIPTION_DELETE_SENT)
+            continue;
+
+        /*
+         * confirmed_only: count a subscription only after the NRF has accepted
+         * it, i.e. SubscriptionId and resource URI have been assigned from the
+         * 201 Created response. A locally pending request is not yet a valid
+         * notification context.
+         */
+        if (confirmed_only &&
+                (!subscription_data->id || !subscription_data->resource_uri))
+            continue;
+
+        if (nf_type_present &&
+            subscription_data->subscr_cond.nf_type != OpenAPI_nf_type_NULL &&
+            subscription_data->subscr_cond.nf_type == nf_type)
+            return true;
+
+        if (service_name_present &&
+            subscription_data->subscr_cond.service_name !=
+                OpenAPI_service_name_NULL &&
+            subscription_data->subscr_cond.service_name == service_name)
+            return true;
+    }
+
+    return false;
 }
 
 bool ogs_sbi_supi_in_vplmn(char *supi)

@@ -147,9 +147,10 @@ void nrf_state_operational(ogs_fsm_t *s, nrf_event_t *e)
                                     true ==
                                     ogs_sbi_server_send_error(
                                         stream,
-                                        OGS_SBI_HTTP_STATUS_PAYLOAD_TOO_LARGE,
-                                        &message, "Insufficient space",
-                                        message.h.resource.component[1], NULL));
+                                        OGS_SBI_HTTP_STATUS_INTERNAL_SERVER_ERROR,
+                                        &message, "Insufficient resources",
+                                        message.h.resource.component[1],
+                                        "INSUFFICIENT_RESOURCES"));
                                 break;
                             }
                             ogs_sbi_nf_instance_set_id(nf_instance,
@@ -298,8 +299,13 @@ void nrf_state_operational(ogs_fsm_t *s, nrf_event_t *e)
     case OGS_EVENT_SBI_TIMER:
         switch(e->h.timer_id) {
         case NRF_TIMER_NF_INSTANCE_NO_HEARTBEAT:
-            nf_instance = e->nf_instance;
-            ogs_assert(nf_instance);
+            nf_instance = ogs_sbi_nf_instance_find_by_pool_id(
+                    OGS_POINTER_TO_UINT(e->h.sbi.data));
+            if (!nf_instance) {
+                ogs_error("NF Instance has already been removed [%d]",
+                        (int)OGS_POINTER_TO_UINT(e->h.sbi.data));
+                break;
+            }
 
             ogs_warn("[%s] No heartbeat", nf_instance->id);
             nf_instance->nf_status = OpenAPI_nf_status_SUSPENDED;
@@ -311,8 +317,13 @@ void nrf_state_operational(ogs_fsm_t *s, nrf_event_t *e)
             break;
 
         case NRF_TIMER_SUBSCRIPTION_VALIDITY:
-            subscription_data = e->subscription_data;
-            ogs_assert(subscription_data);
+            subscription_data = ogs_sbi_subscription_data_find_by_pool_id(
+                    OGS_POINTER_TO_UINT(e->h.sbi.data));
+            if (!subscription_data) {
+                ogs_error("Subscription has already been removed [%d]",
+                        (int)OGS_POINTER_TO_UINT(e->h.sbi.data));
+                break;
+            }
 
             ogs_error("[%s] Subscription validity expired",
                     subscription_data->id);
