@@ -481,6 +481,8 @@ static void bearer_epc_timeout(ogs_pfcp_xact_t *xact, void *data)
     switch (type) {
     case OGS_PFCP_SESSION_MODIFICATION_REQUEST_TYPE:
         ogs_error("No PFCP session modification response");
+        /* a deactivation that stopped here may be started again */
+        bearer->deactivating = false;
         break;
     default:
         ogs_error("Not implemented [type:%d]", type);

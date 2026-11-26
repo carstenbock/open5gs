@@ -328,6 +328,9 @@ typedef struct smf_bearer_s {
         char        *name;          /* EPC: PCC Rule Name */
         char        *id;            /* 5GC: PCC Rule Id */
     } pcc_rule;
+    /* EPC: the removal of the PCC rule has started the deactivation of this
+     * bearer; a second removal of the same rule must not start another */
+    bool            deactivating;
     ogs_qos_t       qos;            /* QoS Information */
 
     OGS_POOL(pf_identifier_pool, uint8_t);

@@ -497,6 +497,20 @@ void smf_bearer_binding(smf_sess_t *sess)
             }
 
             /*
+             * The same rule may be removed twice before the bearer is gone,
+             * e.g. by a Re-Auth-Request from each of two PCRF nodes. A second
+             * deactivation would send a second Delete Bearer Request and a
+             * second PFCP removal, whose response finds no bearer.
+             */
+            if (bearer->deactivating) {
+                ogs_warn("No need to send 'Delete Bearer Request'");
+                ogs_warn("  - Bearer[Name:%s] is already being removed.",
+                        pcc_rule->name);
+                continue;
+            }
+            bearer->deactivating = true;
+
+            /*
              * TS23.214
              * 6.3.1.7 Procedures with modification of bearer
              * p50

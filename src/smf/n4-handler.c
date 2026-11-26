@@ -1285,6 +1285,9 @@ void smf_epc_n4_handle_session_modification_response(
     if (rsp->cause.presence) {
         if (rsp->cause.u8 != OGS_PFCP_CAUSE_REQUEST_ACCEPTED) {
             ogs_error("PFCP Cause [%d] : Not Accepted", rsp->cause.u8);
+            /* a deactivation that stopped here may be started again */
+            if (bearer)
+                bearer->deactivating = false;
             return;
         }
     } else {
@@ -1343,7 +1346,13 @@ void smf_epc_n4_handle_session_modification_response(
     }
 
     if (flags & OGS_PFCP_MODIFY_REMOVE) {
-        ogs_assert(bearer);
+        /* Two removals of one bearer may be under way (a Bearer Resource
+         * Command next to a Gx rule removal): the first response removes
+         * the bearer, the second one finds none. */
+        if (!bearer) {
+            ogs_warn("Bearer has already been removed");
+            return;
+        }
         smf_bearer_remove(bearer);
 
     } else if (flags & OGS_PFCP_MODIFY_CREATE) {
@@ -1374,7 +1383,10 @@ void smf_epc_n4_handle_session_modification_response(
             ogs_pkbuf_t *pkbuf = NULL;
             int rv;
 
-            ogs_assert(bearer);
+            if (!bearer) {
+                ogs_warn("Bearer has already been removed");
+                return;
+            }
 
             memset(&h, 0, sizeof(ogs_gtp2_header_t));
             h.teid = sess->sgw_s5c_teid;
@@ -1449,7 +1461,10 @@ void smf_epc_n4_handle_session_modification_response(
          * 12. SGW-C sends Delete Bearer Response(DECIATED BEARER) to SMF
          * 13. PFCP Session Modification Request/Response(Remove PDR/FAR)
          */
-                ogs_assert(bearer);
+                if (!bearer) {
+                    ogs_warn("Bearer has already been removed");
+                    return;
+                }
 
                 ogs_assert(OGS_OK ==
                     smf_gtp2_send_delete_bearer_request(
