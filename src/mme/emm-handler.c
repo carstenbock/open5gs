@@ -28,6 +28,7 @@
 #include "mme-gtp-path.h"
 
 #include "emm-handler.h"
+#include "mme-li.h"
 
 #undef OGS_LOG_DOMAIN
 #define OGS_LOG_DOMAIN __emm_log_domain
@@ -238,6 +239,7 @@ int emm_handle_attach_request(enb_ue_t *enb_ue, mme_ue_t *mme_ue,
     mme_ue->enb_ostream_id = enb_ue->enb_ostream_id;
     memcpy(&mme_ue->tai, &enb_ue->saved.tai, sizeof(ogs_eps_tai_t));
     memcpy(&mme_ue->e_cgi, &enb_ue->saved.e_cgi, sizeof(ogs_e_cgi_t));
+    mme_li_ue_location(mme_ue);
     mme_ue->ue_location_timestamp = ogs_time_now();
 
     /* Check TAI */
@@ -629,6 +631,8 @@ int emm_handle_detach_request(
     /* Set EPS Detach */
     memcpy(&mme_ue->nas_eps.detach, detach_type, sizeof(ogs_nas_detach_type_t));
 
+    mme_li_ue_detached(mme_ue, true);
+
     /* 1. MME initiated detach request to the UE.
      *    (nas_eps.type = MME_EPS_TYPE_DETACH_REQUEST_TO_UE)
      * 2. If UE is IDLE, Paging sent to the UE
@@ -864,6 +868,7 @@ int emm_handle_tau_request(
     mme_ue->enb_ostream_id = enb_ue->enb_ostream_id;
     memcpy(&mme_ue->tai, &enb_ue->saved.tai, sizeof(ogs_eps_tai_t));
     memcpy(&mme_ue->e_cgi, &enb_ue->saved.e_cgi, sizeof(ogs_e_cgi_t));
+    mme_li_ue_location(mme_ue);
     mme_ue->ue_location_timestamp = ogs_time_now();
 
     /* Check TAI */
@@ -1018,6 +1023,7 @@ int emm_handle_extended_service_request(
     mme_ue->enb_ostream_id = enb_ue->enb_ostream_id;
     memcpy(&mme_ue->tai, &enb_ue->saved.tai, sizeof(ogs_eps_tai_t));
     memcpy(&mme_ue->e_cgi, &enb_ue->saved.e_cgi, sizeof(ogs_e_cgi_t));
+    mme_li_ue_location(mme_ue);
     mme_ue->ue_location_timestamp = ogs_time_now();
 
     /* Check TAI */

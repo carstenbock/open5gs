@@ -28,6 +28,7 @@
 #include "mme-sm.h"
 #include "mme-gtp-path.h"
 #include "mme-dns.h"
+#include "mme-li.h"
 
 static mme_context_t self;
 static ogs_diam_config_t g_diam_conf;
@@ -2575,6 +2576,10 @@ int mme_context_parse_config(void)
                         } else
                             ogs_warn("unknown key `%s`", time_key);
                     }
+                } else if (!strcmp(mme_key, "li_feed_socket")) {
+                    /* Unix socket of the lawful interception sidecar
+                     * (helm ADR-0064); unset = no reporting. */
+                    self.li_feed_socket = ogs_yaml_iter_value(&mme_iter);
                 } else if (!strcmp(mme_key, "metrics")) {
                     /* handle config in metrics library */
                 } else if (!strcmp(mme_key, "dns")) {
@@ -4169,6 +4174,9 @@ void mme_ue_remove(mme_ue_t *mme_ue)
 {
     sgw_ue_t *sgw_ue = NULL;
     ogs_assert(mme_ue);
+
+    /* A context that goes without a detach: the network removed the UE. */
+    mme_li_ue_detached(mme_ue, false);
 
     ogs_list_remove(&self.mme_ue_list, mme_ue);
 

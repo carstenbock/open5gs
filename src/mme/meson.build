@@ -22,6 +22,7 @@ libmme_sources = files('''
     mme-event.h
     mme-timer.h
     mme-context.h
+    mme-li.h
     s1ap-build.h
     s1ap-handler.h
     s1ap-path.h
@@ -55,6 +56,7 @@ libmme_sources = files('''
     mme-event.c
     mme-timer.c
     mme-context.c
+    mme-li.c
     s1ap-sm.c
     s1ap-build.c
     s1ap-handler.c

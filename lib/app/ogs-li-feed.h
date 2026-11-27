@@ -70,7 +70,7 @@ extern "C" {
 #define OGS_LI_FEED_CMD_COPY_ON         1   /* element SESSION */
 #define OGS_LI_FEED_CMD_COPY_OFF        2   /* element SESSION */
 
-#define OGS_LI_FEED_T_SESSION           1   /* 8 octets, the SMF's SEID */
+#define OGS_LI_FEED_T_SESSION           1   /* 8 octets: the SMF's SEID; MME: a key of the UE context */
 #define OGS_LI_FEED_T_TIME              2   /* 8 octets, microseconds UTC */
 #define OGS_LI_FEED_T_IMSI              3   /* digits */
 #define OGS_LI_FEED_T_IMEISV            4   /* digits */
@@ -101,6 +101,15 @@ extern "C" {
 /* PACKET: 4 octets, packets of this connection not copied before this one
  * because the sidecar did not keep up */
 #define OGS_LI_FEED_T_DROPPED           25
+
+/* MME: where the UE is and how it is known */
+#define OGS_LI_FEED_T_TAI               26  /* 3 octets ogs_plmn_id_t, 2 octets TAC */
+#define OGS_LI_FEED_T_ECGI              27  /* 3 octets ogs_plmn_id_t, 4 octets cell (28 bit) */
+#define OGS_LI_FEED_T_GUTI              28  /* 3 octets ogs_nas_plmn_id_t, 2 MME group, 1 MME code, 4 M-TMSI */
+/* MME, DOWN: 1 octet, 1 = the UE detached, 2 = the network removed it */
+#define OGS_LI_FEED_T_DETACH            29
+/* MME, DOWN: 1 octet, 1 = the UE said it switches off */
+#define OGS_LI_FEED_T_SWITCH_OFF        30
 
 #define OGS_LI_FEED_DIR_FROM_UE         1
 #define OGS_LI_FEED_DIR_TO_UE           2

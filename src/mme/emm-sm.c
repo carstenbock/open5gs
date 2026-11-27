@@ -34,6 +34,7 @@
 #include "mme-gtp-path.h"
 #include "mme-path.h"
 #include "mme-sm.h"
+#include "mme-li.h"
 
 #undef OGS_LOG_DOMAIN
 #define OGS_LOG_DOMAIN __emm_log_domain
@@ -1658,6 +1659,7 @@ void emm_state_initial_context_setup(ogs_fsm_t *s, mme_event_t *e)
         switch (message->emm.h.message_type) {
         case OGS_NAS_EPS_ATTACH_COMPLETE:
             ogs_info("[%s] Attach complete", mme_ue->imsi_bcd);
+            mme_li_ue_attached(mme_ue);
 
         /*
          * TS24.301

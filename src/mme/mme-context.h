@@ -217,6 +217,9 @@ typedef struct mme_context_s {
         ogs_session_t session;
     } emergency;
     mme_eir_t eir;     /* Control EIR functionality */
+
+    /* Unix socket of the lawful interception sidecar, NULL = none (mme-li.h) */
+    const char *li_feed_socket;
 } mme_context_t;
 
 typedef struct mme_sgsn_route_s {
@@ -562,6 +565,13 @@ struct mme_ue_s {
 #define MME_DETACH_TYPE_MME_IMPLICIT                4
 #define MME_DETACH_TYPE_HSS_IMPLICIT                5
     uint8_t     detach_type;
+
+    /* Lawful interception (mme-li.h): reported to the sidecar as attached,
+     * and the location it was last told */
+    bool            li_reported;
+    uint64_t        li_key;         /* names this attach towards the sidecar */
+    ogs_eps_tai_t   li_tai;
+    ogs_e_cgi_t     li_e_cgi;
 
     /* UE identity */
 #define MME_UE_HAVE_IMSI(__mME) \

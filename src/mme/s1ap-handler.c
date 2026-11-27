@@ -33,6 +33,7 @@
 
 #include "mme-path.h"
 #include "mme-sm.h"
+#include "mme-li.h"
 
 static bool enb_plmn_id_is_foreign(mme_enb_t *enb)
 {
@@ -1046,6 +1047,7 @@ void s1ap_handle_uplink_nas_transport(
     /* Copy Stream-No/TAI/ECGI from enb_ue (mme_ue checked at function entry) */
     memcpy(&mme_ue->tai, &enb_ue->saved.tai, sizeof(ogs_eps_tai_t));
     memcpy(&mme_ue->e_cgi, &enb_ue->saved.e_cgi, sizeof(ogs_e_cgi_t));
+    mme_li_ue_location(mme_ue);
     mme_ue->ue_location_timestamp = ogs_time_now();
 
     ogs_expect(OGS_OK == s1ap_send_to_nas(
@@ -3169,6 +3171,7 @@ void s1ap_handle_path_switch_request(
     mme_ue->enb_ostream_id = enb_ue->enb_ostream_id;
     memcpy(&mme_ue->tai, &enb_ue->saved.tai, sizeof(ogs_eps_tai_t));
     memcpy(&mme_ue->e_cgi, &enb_ue->saved.e_cgi, sizeof(ogs_e_cgi_t));
+    mme_li_ue_location(mme_ue);
     mme_ue->ue_location_timestamp = ogs_time_now();
 
     if (ue_security_capability_mismatch) {
@@ -4852,6 +4855,7 @@ void s1ap_handle_handover_notification(
     mme_ue->enb_ostream_id = target_ue->enb_ostream_id;
     memcpy(&mme_ue->tai, &target_ue->saved.tai, sizeof(ogs_eps_tai_t));
     memcpy(&mme_ue->e_cgi, &target_ue->saved.e_cgi, sizeof(ogs_e_cgi_t));
+    mme_li_ue_location(mme_ue);
     mme_ue->ue_location_timestamp = ogs_time_now();
 
     r = s1ap_send_ue_context_release_command(source_ue,
