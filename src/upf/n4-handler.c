@@ -21,6 +21,7 @@
 #include "pfcp-path.h"
 #include "gtp-path.h"
 #include "n4-handler.h"
+#include "li.h"
 
 static void upf_n4_handle_create_urr(upf_sess_t *sess,
         ogs_pfcp_tlv_create_urr_t *create_urr,
@@ -142,6 +143,26 @@ void upf_n4_handle_session_establishment_request(
             sess, &req->create_urr[0], &cause_value, &offending_ie_value);
     if (cause_value != OGS_PFCP_CAUSE_REQUEST_ACCEPTED)
         goto cleanup;
+
+    if (req->user_id.presence) {
+        /*
+         * The subscriber, for lawful interception (li.h). A User ID that
+         * cannot be read must not fail the session: it is optional.
+         */
+        ogs_pfcp_user_id_t user_id;
+
+        if (ogs_pfcp_parse_user_id(&user_id, &req->user_id) > 0) {
+            if (user_id.imsif)
+                ogs_buffer_to_bcd(user_id.imsi, user_id.imsi_len,
+                        sess->imsi_bcd, sizeof(sess->imsi_bcd));
+            if (user_id.imeif)
+                ogs_buffer_to_bcd(user_id.imeisv, user_id.imeisv_len,
+                        sess->imeisv_bcd, sizeof(sess->imeisv_bcd));
+            if (user_id.msisdnf)
+                ogs_buffer_to_bcd(user_id.msisdn, user_id.msisdn_len,
+                        sess->msisdn_bcd, sizeof(sess->msisdn_bcd));
+        }
+    }
 
     if (req->apn_dnn.presence) {
         char apn_dnn[OGS_MAX_DNN_LEN+1];
@@ -269,6 +290,8 @@ void upf_n4_handle_session_establishment_request(
         ogs_assert(OGS_OK ==
             upf_pfcp_send_session_establishment_response(
                 xact, sess, created_pdr, num_of_created_pdr));
+
+    upf_li_session_up(sess);
 
     return;
 

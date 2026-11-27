@@ -32,6 +32,12 @@ static struct {
     char *path;
     uint8_t source;
     ogs_li_feed_connected_f connected;
+    ogs_li_feed_command_f command;
+    void (*disconnected)(void);
+
+    /* What the sidecar sent and is not a whole command yet. */
+    uint8_t in[512];
+    size_t in_len;
 
     int fd;
     ogs_poll_t *poll_in;
@@ -56,22 +62,49 @@ static void li_feed_disconnect(void)
     if (self.fd >= 0) close(self.fd);
     self.fd = -1;
     self.len = self.off = 0;
+    self.in_len = 0;
     self.building = false;
     if (self.timer) ogs_timer_start(self.timer, LI_FEED_RETRY);
+    if (self.disconnected)
+        self.disconnected();
 }
 
 static void li_feed_readable(short when, ogs_socket_t fd, void *data)
 {
-    uint8_t discard[512];
     ssize_t n;
+    size_t off = 0;
 
-    /* The sidecar sends nothing yet; what matters is that it is still there. */
-    n = read(fd, discard, sizeof(discard));
-    if (n > 0 || (n < 0 && (errno == EAGAIN || errno == EINTR)))
+    n = read(fd, self.in + self.in_len, sizeof(self.in) - self.in_len);
+    if (n < 0 && (errno == EAGAIN || errno == EINTR))
         return;
+    if (n <= 0) {
+        ogs_warn("LI feed: the sidecar closed the connection");
+        li_feed_disconnect();
+        return;
+    }
+    self.in_len += n;
 
-    ogs_warn("LI feed: the sidecar closed the connection");
-    li_feed_disconnect();
+    while (self.fd >= 0 && self.in_len - off >= 4) {
+        uint32_t len;
+        const uint8_t *msg = self.in + off + 4;
+
+        memcpy(&len, self.in + off, 4);
+        len = be32toh(len);
+        if (len < 2 || len > sizeof(self.in) - 4) {
+            ogs_error("LI feed: malformed command, closing");
+            li_feed_disconnect();
+            return;
+        }
+        if (self.in_len - off - 4 < len)
+            break;
+        if (msg[0] == OGS_LI_FEED_VERSION && self.command)
+            self.command(msg[1], msg + 2, len - 2);
+        off += 4 + len;
+    }
+    if (self.fd < 0)
+        return;
+    memmove(self.in, self.in + off, self.in_len - off);
+    self.in_len -= off;
 }
 
 static void li_feed_writable(short when, ogs_socket_t fd, void *data)
@@ -152,7 +185,8 @@ static void li_feed_connect(void)
 }
 
 int ogs_li_feed_open(
-        const char *path, uint8_t source, ogs_li_feed_connected_f connected)
+        const char *path, uint8_t source, ogs_li_feed_connected_f connected,
+        ogs_li_feed_command_f command, void (*disconnected)(void))
 {
     struct sockaddr_un addr;
 
@@ -168,6 +202,8 @@ int ogs_li_feed_open(
     ogs_assert(self.path);
     self.source = source;
     self.connected = connected;
+    self.command = command;
+    self.disconnected = disconnected;
     self.timer = ogs_timer_add(ogs_app()->timer_mgr, li_feed_timer, NULL);
     ogs_assert(self.timer);
     /* The first connect runs in the event loop, as every later one does. */
@@ -183,6 +219,7 @@ void ogs_li_feed_close(void)
 
     if (self.timer) ogs_timer_delete(self.timer);
     self.timer = NULL;
+    self.disconnected = NULL;
     li_feed_disconnect();
     free(self.buf);
     self.buf = NULL;
@@ -194,6 +231,29 @@ void ogs_li_feed_close(void)
 bool ogs_li_feed_connected(void)
 {
     return self.fd >= 0;
+}
+
+size_t ogs_li_feed_backlog(void)
+{
+    return self.len - self.off;
+}
+
+const uint8_t *ogs_li_feed_find(
+        const uint8_t *elements, size_t len, uint8_t type, size_t *value_len)
+{
+    size_t off = 0;
+
+    while (off + 3 <= len) {
+        size_t n = (elements[off + 1] << 8) | elements[off + 2];
+        if (off + 3 + n > len)
+            break;
+        if (elements[off] == type) {
+            *value_len = n;
+            return elements + off + 3;
+        }
+        off += 3 + n;
+    }
+    return NULL;
 }
 
 static uint8_t *li_feed_reserve(size_t n)

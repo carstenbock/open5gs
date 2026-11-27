@@ -46,6 +46,12 @@ extern "C" {
  * After every (re)connect the function sends SYNC_BEGIN, one ACTIVE per
  * session it has, and SYNC_END: the sidecar forgets what it knew before.
  * While the sidecar is away, events are dropped.
+ *
+ * The sidecar answers on the same socket with commands, framed alike:
+ *   1 octet format version, 1 octet command (OGS_LI_FEED_CMD_*), elements.
+ * A user plane function copies the packets of the sessions the sidecar
+ * names (COPY_ON) as PACKET messages until COPY_OFF, the end of the session
+ * or the end of the connection.
  */
 #define OGS_LI_FEED_VERSION             1
 
@@ -59,6 +65,10 @@ extern "C" {
 #define OGS_LI_FEED_EVENT_ACTIVE        4
 #define OGS_LI_FEED_EVENT_SYNC_BEGIN    5
 #define OGS_LI_FEED_EVENT_SYNC_END      6
+#define OGS_LI_FEED_EVENT_PACKET        7
+
+#define OGS_LI_FEED_CMD_COPY_ON         1   /* element SESSION */
+#define OGS_LI_FEED_CMD_COPY_OFF        2   /* element SESSION */
 
 #define OGS_LI_FEED_T_SESSION           1   /* 8 octets, the SMF's SEID */
 #define OGS_LI_FEED_T_TIME              2   /* 8 octets, microseconds UTC */
@@ -84,19 +94,42 @@ extern "C" {
 #define OGS_LI_FEED_T_UP_PEER_TEID      21  /* 4 octets */
 #define OGS_LI_FEED_T_UP_PEER_ADDR      22  /* 4 or 16 octets */
 
+/* PACKET: 1 octet, OGS_LI_FEED_DIR_* */
+#define OGS_LI_FEED_T_DIRECTION         23
+/* PACKET: the IP packet of the UE, without tunnel headers */
+#define OGS_LI_FEED_T_PACKET            24
+/* PACKET: 4 octets, packets of this connection not copied before this one
+ * because the sidecar did not keep up */
+#define OGS_LI_FEED_T_DROPPED           25
+
+#define OGS_LI_FEED_DIR_FROM_UE         1
+#define OGS_LI_FEED_DIR_TO_UE           2
+
 typedef void (*ogs_li_feed_connected_f)(void);
+/* One command of the sidecar; `elements` are its elements, undecoded. */
+typedef void (*ogs_li_feed_command_f)(
+        uint8_t command, const uint8_t *elements, size_t len);
 
 /*
  * Starts the feed towards the socket `path`. `connected` runs in the event
  * loop after every connect, between SYNC_BEGIN and SYNC_END: it sends one
- * ACTIVE per session. Call before the event loop starts.
+ * ACTIVE per session. `command` (may be NULL) gets the sidecar's commands;
+ * `disconnected` (may be NULL) runs when the connection is lost. Call
+ * before the event loop starts.
  */
 int ogs_li_feed_open(
-        const char *path, uint8_t source, ogs_li_feed_connected_f connected);
+        const char *path, uint8_t source, ogs_li_feed_connected_f connected,
+        ogs_li_feed_command_f command, void (*disconnected)(void));
 void ogs_li_feed_close(void);
 
 /* True while a sidecar is connected: build no message otherwise. */
 bool ogs_li_feed_connected(void);
+/* Octets not yet taken by the sidecar: a sender of bulk data (packets)
+ * drops instead of adding to a large backlog. */
+size_t ogs_li_feed_backlog(void);
+/* The value of the first element of `type`, or NULL. */
+const uint8_t *ogs_li_feed_find(
+        const uint8_t *elements, size_t len, uint8_t type, size_t *value_len);
 
 /* One message: begin, any number of put, end. Event loop only. */
 void ogs_li_feed_begin(uint8_t event);

@@ -18,6 +18,7 @@
  */
 
 #include "context.h"
+#include "li.h"
 #include "pfcp-path.h"
 
 static upf_context_t self;
@@ -172,6 +173,10 @@ int upf_context_parse_config(void)
                     /* handle config in pfcp library */
                 } else if (!strcmp(upf_key, "metrics")) {
                     /* handle config in metrics library */
+                } else if (!strcmp(upf_key, "li_feed_socket")) {
+                    /* Unix socket of the lawful interception sidecar
+                     * (helm ADR-0064); unset = no reporting. */
+                    self.li_feed_socket = ogs_yaml_iter_value(&upf_iter);
                 } else
                     ogs_warn("unknown key `%s`", upf_key);
             }
@@ -229,6 +234,8 @@ upf_sess_t *upf_sess_add(ogs_pfcp_f_seid_t *cp_f_seid)
 int upf_sess_remove(upf_sess_t *sess)
 {
     ogs_assert(sess);
+
+    upf_li_session_down(sess);
 
     upf_sess_urr_acc_remove_all(sess);
 

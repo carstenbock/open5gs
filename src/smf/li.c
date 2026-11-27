@@ -110,8 +110,8 @@ int smf_li_open(void)
     if (!smf_self()->li_feed_socket)
         return OGS_OK;
 
-    return ogs_li_feed_open(
-            smf_self()->li_feed_socket, OGS_LI_FEED_SOURCE_SMF, send_all);
+    return ogs_li_feed_open(smf_self()->li_feed_socket,
+            OGS_LI_FEED_SOURCE_SMF, send_all, NULL, NULL);
 }
 
 void smf_li_close(void)

@@ -21,6 +21,7 @@
 #include "gtp-path.h"
 #include "pfcp-path.h"
 #include "metrics.h"
+#include "li.h"
 
 static ogs_thread_t *thread;
 static void upf_main(void *data);
@@ -74,6 +75,9 @@ int upf_initialize(void)
     rv = upf_gtp_open();
     if (rv != OGS_OK) return rv;
 
+    rv = upf_li_open();
+    if (rv != OGS_OK) return rv;
+
     thread = ogs_thread_create(upf_main, NULL);
     if (!thread) return OGS_ERROR;
 
@@ -90,6 +94,7 @@ void upf_terminate(void)
 
     ogs_thread_destroy(thread);
 
+    upf_li_close();
     upf_pfcp_close();
     upf_gtp_close();
 

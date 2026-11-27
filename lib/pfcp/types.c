@@ -816,3 +816,40 @@ int16_t ogs_pfcp_build_user_id(
 
     return octet->len;
 }
+
+int16_t ogs_pfcp_parse_user_id(
+        ogs_pfcp_user_id_t *user_id, ogs_tlv_octet_t *octet)
+{
+    const uint8_t *p = NULL;
+    int16_t size = 0;
+    uint8_t len;
+
+    ogs_assert(user_id);
+    ogs_assert(octet);
+
+    memset(user_id, 0, sizeof(*user_id));
+    p = octet->data;
+    if (!p || octet->len < 1)
+        return -1;
+
+    user_id->flags = p[size++];
+
+#define USER_ID_FIELD(__fLAG, __lEN, __vALUE, __mAX) \
+    if (__fLAG) { \
+        if (size + 1 > octet->len) return -1; \
+        len = p[size++]; \
+        if (len > (__mAX) || size + len > octet->len) return -1; \
+        (__lEN) = len; \
+        memcpy((__vALUE), p + size, len); \
+        size += len; \
+    }
+    USER_ID_FIELD(user_id->imsif,
+            user_id->imsi_len, user_id->imsi, OGS_MAX_IMSI_LEN)
+    USER_ID_FIELD(user_id->imeif,
+            user_id->imeisv_len, user_id->imeisv, OGS_MAX_IMEISV_LEN)
+    USER_ID_FIELD(user_id->msisdnf,
+            user_id->msisdn_len, user_id->msisdn, OGS_MAX_MSISDN_LEN)
+#undef USER_ID_FIELD
+
+    return size;
+}

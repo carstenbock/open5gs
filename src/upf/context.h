@@ -59,6 +59,9 @@ typedef struct upf_context_s {
     struct upf_route_trie_node *ipv6_framed_routes;
 
     ogs_list_t sess_list;
+
+    /* Unix socket of the lawful interception sidecar, NULL = none (li.h) */
+    const char *li_feed_socket;
 } upf_context_t;
 
 /* trie mapping from IP framed routes to session. */
@@ -126,6 +129,14 @@ typedef struct upf_sess_s {
     /* Accounting: */
     upf_sess_urr_acc_t urr_acc[OGS_MAX_NUM_OF_URR]; /* FIXME: This probably needs to be mved to a hashtable or alike */
     char            *apn_dnn;            /* APN/DNN Item */
+
+    /* The subscriber, from the PFCP User ID; empty when the SMF sent none */
+    char            imsi_bcd[OGS_MAX_IMSI_BCD_LEN+1];
+    char            imeisv_bcd[OGS_MAX_IMEISV_BCD_LEN+1];
+    char            msisdn_bcd[OGS_MAX_MSISDN_BCD_LEN+1];
+
+    bool            li_reported;    /* reported to the LI sidecar (li.h) */
+    bool            li_copy;        /* the sidecar wants its packets */
 } upf_sess_t;
 
 void upf_context_init(void);

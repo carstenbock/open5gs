@@ -50,6 +50,7 @@ libupf_sources = files('''
     timer.h
     metrics.h
     context.h
+    li.h
     upf-sm.h
     gtp-path.h
     pfcp-path.h
@@ -62,6 +63,7 @@ libupf_sources = files('''
     event.c
     timer.c
     context.c
+    li.c
     upf-sm.c
     pfcp-sm.c
     gtp-path.c

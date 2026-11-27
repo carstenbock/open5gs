@@ -1603,6 +1603,10 @@ ED8(uint8_t spare:1;,
 int16_t ogs_pfcp_build_user_id(
         ogs_tlv_octet_t *octet, ogs_pfcp_user_id_t *user_id,
         void *data, int data_len);
+/* IMSI, IMEI and MSISDN of a User ID; the other fields are skipped.
+ * Returns the octets read, or a negative value for a malformed element. */
+int16_t ogs_pfcp_parse_user_id(
+        ogs_pfcp_user_id_t *user_id, ogs_tlv_octet_t *octet);
 
 /* 8.2.80 Failed Rule ID */
 #define OGS_PFCP_RULE_TYPE_PDR 0

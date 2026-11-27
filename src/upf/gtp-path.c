@@ -52,6 +52,7 @@
 #include "gtp-path.h"
 #include "pfcp-path.h"
 #include "rule-match.h"
+#include "li.h"
 
 #define UPF_GTP_HANDLED     1
 
@@ -217,6 +218,8 @@ static void _gtpv1_tun_recv_common_one(ogs_socket_t fd, ogs_pkbuf_t *recvbuf, bo
     /* Increment total & dl octets + pkts */
     for (i = 0; i < pdr->num_of_urr; i++)
         upf_sess_urr_acc_add(sess, pdr->urr[i], recvbuf->len, false);
+
+    upf_li_packet(sess, OGS_LI_FEED_DIR_TO_UE, recvbuf->data, recvbuf->len);
 
     ogs_assert(true == ogs_pfcp_up_handle_pdr(
                 pdr, OGS_GTPU_MSGTYPE_GPDU, 0, NULL, recvbuf, &report));
@@ -751,6 +754,10 @@ static void _gtpv1_u_recv_one(ogs_socket_t fd, ogs_sock_t *sock, ogs_pkbuf_t *pk
 
         }
 
+        if (pdr->src_if == OGS_PFCP_INTERFACE_ACCESS)
+            upf_li_packet(sess,
+                    OGS_LI_FEED_DIR_FROM_UE, pkbuf->data, pkbuf->len);
+
         if (far->dst_if == OGS_PFCP_INTERFACE_CORE &&
             far->dst_if_type_presence == true &&
             far->dst_if_type == OGS_PFCP_3GPP_INTERFACE_TYPE_N6) {
@@ -844,6 +851,9 @@ static void _gtpv1_u_recv_one(ogs_socket_t fd, ogs_sock_t *sock, ogs_pkbuf_t *pk
                         upf_sess_urr_acc_add(
                             dst_sess, dl_pdr->urr[i],
                             pkbuf->len, false);
+
+                    upf_li_packet(dst_sess,
+                            OGS_LI_FEED_DIR_TO_UE, pkbuf->data, pkbuf->len);
 
                     ogs_assert(true == ogs_pfcp_up_handle_pdr(
                         dl_pdr, OGS_GTPU_MSGTYPE_GPDU,
