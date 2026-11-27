@@ -26,6 +26,7 @@
 #include "sbi-path.h"
 #include "ngap-path.h"
 #include "fd-path.h"
+#include "li.h"
 
 uint8_t gtp_cause_from_pfcp(uint8_t pfcp_cause, uint8_t gtp_version)
 {
@@ -1566,6 +1567,7 @@ void smf_epc_n4_handle_session_modification_response(
 
                 ogs_assert(OGS_OK == smf_gtp2_send_modify_bearer_response(
                             sess, gtp_xact, gtp_req, true));
+                smf_li_session_modified(sess);
 
                 /* Check if Handover from Non-3GPP to 3GPP */
                 if (gtp_req->indication_flags.presence &&

@@ -22,11 +22,13 @@ libapp_sources = files('''
     ogs-context.h
     ogs-config.h
     ogs-init.h
+    ogs-li-feed.h
 
     ogs-yaml.c
     ogs-context.c
     ogs-config.c
     ogs-init.c
+    ogs-li-feed.c
 '''.split())
 
 yaml_dep = dependency('yaml-0.1')

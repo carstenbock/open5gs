@@ -167,6 +167,9 @@ typedef struct smf_context_s {
      * new Create Session Requests are rejected. */
     ogs_time_t      shutdown_drain_timeout;
     int             shutdown_drain_rate; /* sessions/s, 0 = all at once */
+
+    /* Unix socket of the lawful interception sidecar, NULL = none (li.h) */
+    const char      *li_feed_socket;
     /*
      * Own GTP-C restart counter, TS 23.007 §18 / TS 29.274 §8.17 (KI-123).
      * Not persisted: derived from the start time, so it changes with every
@@ -394,6 +397,7 @@ typedef struct smf_sess_s {
     bool            epc;            /**< EPC or 5GC */
     /* Counted in fivegs_smffunction_sm_sessionnbr (KI-78) */
     bool            sessionnbr_counted;
+    bool            li_reported;    /* reported to the LI sidecar (li.h) */
     /* Release requested by the shutdown drain (KI-174) */
     bool            drain_triggered;
     /* Guard for the Gx/Gy/S6b termination answers (KI-62) */

@@ -27,6 +27,7 @@
 #include "metrics/prometheus/json_pager.h"
 #include "pdu-info.h"
 #include "local-path.h"
+#include "li.h"
 
 static ogs_thread_t *thread;
 static void smf_main(void *data);
@@ -83,6 +84,9 @@ int smf_initialize(void)
     if (rv != 0) return OGS_ERROR;
 
     rv = smf_gtp_open();
+    if (rv != 0) return OGS_ERROR;
+
+    rv = smf_li_open();
     if (rv != 0) return OGS_ERROR;
 
     rv = smf_pfcp_open();
@@ -142,6 +146,7 @@ void smf_terminate(void)
     ogs_pollset_notify(ogs_app()->pollset);
     ogs_thread_destroy(thread);
 
+    smf_li_close();
     smf_gtp_close();
     smf_pfcp_close();
     smf_sbi_close();

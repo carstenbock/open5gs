@@ -36,6 +36,7 @@
 #include "ngap-path.h"
 #include "fd-path.h"
 #include "local-path.h"
+#include "li.h"
 
 /*
  * Answers for which RFC 4006 5.7 has the client apply its
@@ -1263,6 +1264,7 @@ void smf_gsm_state_operational(ogs_fsm_t *s, smf_event_t *e)
                     SMF_METR_GAUGE_SM_SESSIONNBR, 1);
             sess->sessionnbr_counted = true;
         }
+        smf_li_session_up(sess);
         break;
 
     case OGS_FSM_EXIT_SIG:

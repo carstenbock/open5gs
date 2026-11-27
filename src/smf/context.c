@@ -18,6 +18,7 @@
  */
 
 #include "context.h"
+#include "li.h"
 #include "gtp-path.h"
 #include "pfcp-path.h"
 #include "local-path.h"
@@ -783,6 +784,11 @@ int smf_context_parse_config(void)
                     if (v)
                         self.shutdown_drain_timeout =
                             ogs_time_from_sec(atoi(v));
+
+                } else if (!strcmp(smf_key, "li_feed_socket")) {
+                    /* Unix socket of the lawful interception sidecar
+                     * (helm ADR-0064); unset = no reporting. */
+                    self.li_feed_socket = ogs_yaml_iter_value(&smf_iter);
 
                 } else if (!strcmp(smf_key, "shutdown_drain_rate")) {
                     /* Sessions per second released by the shutdown drain
@@ -2462,6 +2468,8 @@ void smf_sess_remove(smf_sess_t *sess)
     ogs_assert(smf_ue);
 
     smf_sess_stop_auth_release_guard(sess);
+
+    smf_li_session_down(sess);
 
     ogs_info("Removed Session: UE IMSI:[%s] DNN:[%s:%d] IPv4:[%s] IPv6:[%s]",
             smf_ue->supi ? smf_ue->supi : smf_ue->imsi_bcd,

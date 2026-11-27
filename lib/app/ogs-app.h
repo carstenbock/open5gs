@@ -30,6 +30,7 @@ extern int __ogs_app_domain;
 #include "app/ogs-context.h"
 #include "app/ogs-config.h"
 #include "app/ogs-init.h"
+#include "app/ogs-li-feed.h"
 
 #undef OGS_APP_INSIDE
 
